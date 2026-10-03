@@ -24,9 +24,13 @@ python_version = "3.14"
 strict = true
 files = ["src/sceneweave"]
 
-# Concordia 2.4.0 未发布 py.typed；仅跟随其已核对的 Entity 类型模块。
+# Concordia 2.4.0 未发布 py.typed；仅跟随已核对的类型模块。
 [[tool.mypy.overrides]]
-module = ["concordia.typing.entity"]
+module = [
+    "concordia.typing.entity",
+    "concordia.typing.logging",
+    "concordia.utils.structured_logging",
+]
 follow_untyped_imports = true
 
 [tool.pytest.ini_options]
