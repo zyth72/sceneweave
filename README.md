@@ -41,11 +41,14 @@ src/sceneweave/
 │   ├── report.py                 # 单周期报告：角色可见视图与客观/诊断内容
 │   └── control.py                # 运行门协议与运行状态（供控制适配注入）
 ├── roles/base.py                 # 角色 perceive/rejected 交互契约
-├── roles/components/             # 角色内部 System1/2/3 组件（尚未实现）
+├── roles/model_role.py           # 模型驱动角色：内部串行编排 System1/2/3
+├── roles/model_output.py         # 模型 JSON 输出的严格解析（错误不转空）
+├── roles/components/             # System1/2/3 组件与采样器协议、阶段留痕
 ├── translator/base.py            # 行动翻译器可注入契约（模型驱动实现尚未交付）
 └── integrations/concordia/
     ├── entity.py                 # 框架实体接入
     ├── tracing.py                # 领域追踪接入 Concordia 结构化/组件日志
+    ├── sampling.py               # 语言模型采样桥（真实组件日志）与录制/重放
     └── control.py                # StepController 运行门与真实 StepData 转换
 tests/                          # 不依赖真实模型的测试
 examples/                       # 场景组装与演示
@@ -57,7 +60,7 @@ examples/                       # 场景组装与演示
 
 **行动翻译器** 通过 `translator/base.py` 的可注入契约接入：输入携带已通过检查的完整响应、当前时刻、共同状态版本、该角色既有行动安排，以及 World 提供的只读客观上下文（`ObjectiveContext`，含共同版本与位置/姿态/障碍/实际进展等条件，不进入角色感知）；输出新行动的时间安排与修改声明的未来安排。仅维持或空声明的轮次不调用翻译器（合成关联同一响应的空安排），仍参与统一登记与撤回。翻译结构不一致（引用错误、缺安排、组关联错误）属于运行错误；合法完整翻译中的时间安排不合业务约束才经 `rejected` 打回角色在同一周期内重试（不重投原感知）。模型驱动的翻译实现尚未交付，当前由示例与测试注入脚本实现。
 
-**角色** 保存自身认知、意向和内部状态。`Role` 抽象类实现 `perceive(TurnInput)` 与 `rejected(Rejection)` 交互契约：前者接收本轮输入并返回完整主动行为声明，后者接收 World 的打回反馈并返回新的完整声明。System1/2/3 的协作在角色内部实现，相关组件放入 `roles/components/`（尚未实现）。角色收到的是自己的感知，不是完整世界状态。
+**角色** 保存自身认知、意向和内部状态。`Role` 抽象类实现 `perceive(TurnInput)` 与 `rejected(Rejection)` 交互契约：前者接收本轮输入并返回完整主动行为声明，后者接收 World 的打回反馈并返回新的完整声明。`ModelRole`（`roles/model_role.py`）以注入的采样器驱动内部串行的 System1/2/3（同角色由角色锁串行、跨角色并行）：System1 只更新认知并判断是否重新考虑（不重新考虑时返回完整维持集合，终态行动经引擎已知状态对齐排除）；System2 选择/保持/改变/放弃意向；System3 落实为本次完整主动集合（维持/明确修改/一个新增并行组/显式空），做法不可行可内部重做、意向不可行反馈 System2，两类重试有明确上限，解析失败或超限按错误传播、不转换为空声明。角色严格区分候选与已确认行动：新行动只是提议，在引擎登记并经下一轮已知状态确认前不可被维持或修改（身份保留防复用）；明确修改作为待生效候选记录，随被接受的声明确认后才进入有效做法的私人认知；打回候选不提前影响既有安排（放弃/修改都随最终被接受的声明生效）。System2/3 的提示携带原始已知观测、已知自身状态细节、私人认知与可注入的静态背景。模型 JSON 输出经 `roles/model_output.py` 严格校验（类型/必填/未知字段/重复键/非有限常量/矛盾标记/引用冲突）。每份响应的身份在阶段开始前分配并贯穿各阶段留痕；打回反馈只接受当前周期、本角色、当前待检查响应且引用声明内的行动。角色收到的是自己的感知，不是完整世界状态；私人认知不进入他人感知或世界事实。
 
 **Concordia 接入** 放在 `integrations/concordia/` 和必要的自定义角色组件中。领域消息、World 接口和响应屏障不导入框架（有测试守护该边界）。`integrations/concordia/tracing.py` 把领域追踪记录写入锁定版本的 `SimulationLog` 结构化日志，并为 Concordia 组件提供写入同一日志的 logging channel，使感知、响应、检查、打回与错误可沿周期/角色/响应/行动身份检索。`integrations/concordia/control.py` 把锁定版本的 `StepController` 适配为引擎运行门（运行、暂停、继续、单步、停止；许可在每个完整周期前的安全边界取得——初始化也是安全边界，首次事件处理前先等待许可；等待不占用事件循环，取消与停止释放等待线程；暂停不打断 World 提交、不推进剧情时钟），并把单周期报告转换为真实 `StepData` 广播给 `SimulationServer`——包含剧情毫秒、同刻全部事件（含行动节点类型与身份）、完整主动声明、登记后的行动记录、World 实际行动与被动过程的客观诊断、角色可见感知与自身行动状态、事实增量与结算结果、诊断变化原因；运行结束时以真实最终时刻与停止原因构造收尾步数据，不复播旧报告。观察者/诊断内容不进入角色感知。Concordia 的默认循环不能自动替代本项目的调度约定。
 
@@ -87,4 +90,6 @@ uv run --locked python examples/ui_demo.py [端口]
 
 Concordia 接入：结构化/组件日志见 `integrations/concordia/tracing.py`；运行控制与界面步数据见 `integrations/concordia/control.py`——真实 `StepController` 适配为运行门（暂停不打断 World 提交、不推进剧情时钟；本项目没有墙钟总预算，仅模型请求自身可有超时），真实 `StepData` 广播到 `SimulationServer`（`tests/test_concordia_control.py` 以真实服务器与 HTTP 端点验证）。可运行演示见「演示运行」一节。
 
-尚未实现：模型驱动的 System1/2/3 组件、模型驱动的行动翻译器与 World 语义判断、具体世界事实模型与场景卡接入、从文件加载配置的加载器、场景自然结束条件的场景侧定义。这些不影响已交付闭环的可运行性——相关位置以可注入接口承接，示例中的脚本实现明确标注为演示用假件。
+模型驱动的 System1/2/3 已由 `ModelRole` 与 `roles/components/` 落实：组件经可注入的 `TextSampler` 协议调用模型，`integrations/concordia/sampling.py` 提供真实 Concordia `LanguageModel` 的异步桥（采样经真实 `ComponentWithLogging` 组件把原始输入/输出写入 `SimulationLog`；`channel_for` 按阶段建立通道，datum 标记实际阶段），以及按作用域（角色）隔离的录制/重放：跨角色并行采样的完成顺序不确定，共享单个录制文件无法重放，`RecordingDirectory`/`ReplayDirectory` 为每个角色生成独立文件即可确定性重放整个多角色运行；录制包含失败调用（重放重现原错误身份），请求逐条严格匹配、错配不消费记录。注意：线程中的同步模型调用无法被硬取消——取消/超时只放弃等待，底层调用会继续到自然返回。阶段记录（提示、原始输出、解析结果、跳过/重试/错误与周期/角色/响应/行动/剧情时间身份）写入与调度器相同的因果链，追踪器自身失败不掩盖模型/解析异常。每个阶段（含跳过）都有测试与端到端集成（ModelRole + 假 World/Translator + Scheduler + 结构化日志 + StepData，含双角色并行录制重放回归）。生产语义的具体提示工程与真实模型参数调优未在本批验证（测试与演示使用脚本假模型）。
+
+尚未实现：模型驱动的行动翻译器与 World 语义判断、具体世界事实模型与场景卡接入、从文件加载配置的加载器、场景自然结束条件的场景侧定义。这些不影响已交付闭环的可运行性——相关位置以可注入接口承接，示例中的脚本实现明确标注为演示用假件。

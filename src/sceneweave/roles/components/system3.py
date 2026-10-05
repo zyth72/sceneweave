@@ -1,0 +1,138 @@
+"""System3：把意向落实为本次完整主动行为集合。
+
+System3 输出从现在起要主动实施或维持的全部行为：维持既有行动、明确
+修改未来部分、或提交一组新的并行行动；显式空集合表示撤回全部主动
+维持。发现只是当前做法不可行可以要求重做（须说明原因）；发现意向
+本身无法落实则反馈 System2。语义可执行性由 World 检查，这里不做
+固定动作表判断。
+"""
+
+from sceneweave.domain.identity import ResponseId
+from sceneweave.domain.tracing import TurnTracer
+from sceneweave.roles.components.base import TextSampler
+from sceneweave.roles.components.support import OwnActionDigest, TurnFacts, trace_stage
+from sceneweave.roles.model_output import ModelOutputError, System3Plan, parse_system3_plan
+
+SCHEMA = (
+    '{"feasible": true/false, "reason": "不可行或重做的原因", "retry": true/false,'
+    ' "maintain": ["继续维持的行动身份", ...],'
+    ' "modify": [{"id": "行动身份", "change": "明确的修改"}, ...],'
+    ' "new_actions": ["新行动的自然语言描述", ...]}'
+)
+
+
+def build_prompt(
+    facts: TurnFacts,
+    intention: str,
+    own_actions: tuple[OwnActionDigest, ...],
+    context_note: str | None,
+    abandon: tuple[str, ...],
+    attempt: int,
+    background: str,
+    memory: tuple[str, ...],
+) -> str:
+    actions = [f"- {aid}（{phase}）：{description}" for aid, phase, description in own_actions] or [
+        "- 无"
+    ]
+    observations = [f"- {item}" for item in facts.observations] or ["- 无外部感知"]
+    known = [f"- {aid}（{phase}）：{detail}" for aid, phase, detail in facts.known_actions] or [
+        "- 无"
+    ]
+    lines = [
+        f"你是角色 {facts.role_id}。{background}".rstrip(),
+        f"当前剧情时刻 {facts.simulation_time} 毫秒。",
+        f"当前意向：{intention}",
+        "私人认知：",
+        *([f"- {item}" for item in memory] or ["- 无"]),
+        "本轮感知（原始已知观测）：",
+        *observations,
+        "自身行动状态（引擎确认的细节）：",
+        *known,
+        "自身可继续主动维持的行动：",
+        *actions,
+    ]
+    if abandon:
+        lines.append(f"System2 决定放弃以下行动的意向：{list(abandon)}")
+    if context_note is not None:
+        lines.append(f"需要针对的问题：{context_note}")
+    if attempt > 1:
+        lines.append(f"这是第 {attempt} 次落实尝试。")
+    lines += [
+        "第三步：给出从现在起你要主动实施或维持的完整行为集合。",
+        "维持既有行动就列出身份；要调整未来部分就写明修改；新尝试构成一个并行组；",
+        "不再主动维持任何行为时用全空的集合显式表达。",
+        "做法不可行时设 retry=true 并说明原因；意向本身无法落实时设 feasible=false"
+        " 并说明原因；两者不能同时成立。",
+        "只输出一个 JSON 对象，只含 schema 字段，四个必填键一个都不能省：",
+        SCHEMA,
+    ]
+    return "\n".join(lines)
+
+
+async def run(
+    sampler: TextSampler,
+    facts: TurnFacts,
+    intention: str,
+    own_actions: tuple[OwnActionDigest, ...],
+    *,
+    response_id: ResponseId,
+    context_note: str | None = None,
+    abandon: tuple[str, ...] = (),
+    attempt: int = 1,
+    background: str = "",
+    memory: tuple[str, ...] = (),
+    tracer: TurnTracer | None = None,
+) -> System3Plan:
+    """执行 System3；解析失败与不可行反馈如实传播。"""
+    prompt = build_prompt(
+        facts, intention, own_actions, context_note, abandon, attempt, background, memory
+    )
+    try:
+        raw = await sampler.sample(prompt, component="system3")
+    except Exception as error:
+        trace_stage(
+            tracer,
+            "system3.declare",
+            facts,
+            response_id,
+            "System3 采样失败",
+            prompt=prompt,
+            raw_output=None,
+            error=f"{type(error).__name__}: {error}",
+        )
+        raise
+    try:
+        plan = parse_system3_plan(raw)
+    except ModelOutputError as error:
+        trace_stage(
+            tracer,
+            "system3.declare",
+            facts,
+            response_id,
+            "System3 输出未通过结构校验",
+            prompt=prompt,
+            raw_output=raw,
+            error=str(error),
+        )
+        raise
+    trace_stage(
+        tracer,
+        "system3.declare",
+        facts,
+        response_id,
+        "System3 给出完整声明"
+        if (plan.feasible and not plan.retry)
+        else ("System3 要求重做" if plan.retry else "System3 反馈意向不可行"),
+        prompt=prompt,
+        raw_output=raw,
+        details={
+            "feasible": plan.feasible,
+            "retry": plan.retry,
+            "reason": plan.reason,
+            "maintain": "、".join(str(item) for item in plan.maintain),
+            "modify": "；".join(f"{item.action_id}:{item.change}" for item in plan.modify),
+            "new_actions": "；".join(plan.new_descriptions),
+            "attempt": attempt,
+        },
+    )
+    return plan

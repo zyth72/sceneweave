@@ -557,3 +557,40 @@ class ScriptedTranslator:
             schedules=tuple(schedules),
             modified_schedules=tuple(modified_schedules),
         )
+
+
+class ScriptedSampler:
+    """脚本采样器：按组件名顺序返回脚本文本；无脚本即错误。
+
+    gate 提供事件时在记录调用后阻塞，用于验证跨角色并行与剧情冻结。
+    严格无默认回答：组件缺少脚本直接报错，不悄悄 fallback。
+    """
+
+    def __init__(
+        self,
+        script: dict[str, list[str]] | None = None,
+        *,
+        gate: asyncio.Event | None = None,
+    ) -> None:
+        self.script = {name: list(items) for name, items in (script or {}).items()}
+        self.gate = gate
+        self.calls: list[tuple[str, str]] = []
+        self.in_flight = 0
+
+    def components(self) -> list[str]:
+        return [component for component, _ in self.calls]
+
+    async def sample(self, prompt: str, *, component: str) -> str:
+        self.calls.append((component, prompt))
+        self.in_flight += 1
+        try:
+            if self.gate is not None:
+                await self.gate.wait()
+            responses = self.script.get(component)
+            if responses is None:
+                raise AssertionError(f"组件 {component} 没有脚本回答")
+            if not responses:
+                raise AssertionError(f"组件 {component} 的脚本已耗尽")
+            return responses.pop(0)
+        finally:
+            self.in_flight -= 1

@@ -28,7 +28,9 @@ files = ["src/sceneweave"]
 [[tool.mypy.overrides]]
 module = [
     "concordia.typing.entity",
+    "concordia.typing.entity_component",
     "concordia.typing.logging",
+    "concordia.language_model.language_model",
     "concordia.utils.structured_logging",
     "concordia.environment.step_controller",
     "concordia.utils.simulation_server",
