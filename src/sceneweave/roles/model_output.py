@@ -5,14 +5,19 @@
 声明。schema 以现有不可变消息承接，保持最小直白。
 """
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
 from sceneweave.domain.identity import ActionId
+from sceneweave.domain.model_json import (
+    ModelJsonError,
+)
+from sceneweave.domain.model_json import (
+    parse_model_json as _shared_parse_model_json,
+)
 
 
-class ModelOutputError(ValueError):
+class ModelOutputError(ModelJsonError):
     """模型输出未通过结构校验；不得转换为空声明或默认行为。"""
 
 
@@ -113,12 +118,6 @@ class System3Plan:
             raise ModelOutputError("retry 与 feasible=false 不能同时成立")
 
 
-def _require_mapping(value: Any, stage: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ModelOutputError(f"{stage} 输出必须是 JSON 对象")
-    return value
-
-
 def _require_keys(data: dict[str, Any], keys: tuple[str, ...], stage: str) -> None:
     missing = [key for key in keys if key not in data]
     if missing:
@@ -148,41 +147,12 @@ def _require_id_list(value: Any, field: str) -> tuple[ActionId, ...]:
     return tuple(items)
 
 
-def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """重复键直接拒绝：后值覆盖前值会悄悄改变声明语义。"""
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ModelOutputError(f"JSON 对象存在重复键：{key}")
-        result[key] = value
-    return result
-
-
-def _reject_constant(name: str) -> Any:
-    raise ModelOutputError(f"JSON 不接受非有限常量：{name}")
-
-
 def parse_model_json(raw: str, stage: str, *, allowed_keys: tuple[str, ...]) -> dict[str, Any]:
-    """解析一段模型文本为 JSON 对象；失败是明确错误，不做修复。
-
-    重复键、NaN/Infinity 与 schema 外未知键都拒绝，避免错误输出被
-    解释为合法空集合或维持声明。
-    """
-    if not isinstance(raw, str) or not raw.strip():
-        raise ModelOutputError(f"{stage} 输出为空")
+    """共享严格解析的角色侧包装：错误统一为 ModelOutputError。"""
     try:
-        data = json.loads(
-            raw,
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=_reject_constant,
-        )
-    except json.JSONDecodeError as error:
-        raise ModelOutputError(f"{stage} 输出不是合法 JSON：{error}") from error
-    data = _require_mapping(data, stage)
-    unknown = sorted(set(data) - set(allowed_keys))
-    if unknown:
-        raise ModelOutputError(f"{stage} 输出包含未知字段：{unknown}")
-    return data
+        return _shared_parse_model_json(raw, stage, allowed_keys=allowed_keys)
+    except ModelJsonError as error:
+        raise ModelOutputError(str(error)) from error
 
 
 def parse_system1_decision(raw: str) -> System1Decision:

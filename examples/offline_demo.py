@@ -265,15 +265,20 @@ class DemoWorld(World):
         for node in self._pending_nodes:
             if node.node is ActionNodeKind.START:
                 self._active.append((node.action_id, str(node.role_id)))
-                if node.action_id == ActionId("a-walk"):
+                if "走向" in node.description:
                     self.speed = 0.25 / 1000  # 每毫秒 0.25 米
         for node in self._pending_modifications:
             if "更快" in node.change:
                 self.speed *= 2
             elif "更慢" in node.change:
                 self.speed /= 2
+        ended_walking = {
+            node.action_id
+            for node in self._pending_nodes
+            if node.node is ActionNodeKind.END and "走向" in node.description
+        }
         for outcome in candidate.action_outcomes:
-            if outcome.action_id == ActionId("a-walk") and outcome.result in (
+            if outcome.action_id in ended_walking and outcome.result in (
                 ActionOutcomeResult.COMPLETED,
                 ActionOutcomeResult.FAILED,
             ):
