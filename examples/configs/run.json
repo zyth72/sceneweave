@@ -1,0 +1,24 @@
+{
+  "scene_path": "scene.json",
+  "roles": [
+    {
+      "id": "lin",
+      "background": "林舟是一名谨慎的侦探，对环境细节敏感。"
+    },
+    {
+      "id": "shen",
+      "background": "沈言是林舟的搭档，性格开朗。"
+    }
+  ],
+  "initial_events": [
+    {
+      "id": "startup",
+      "time_seconds": 0,
+      "description": "书房里很安静，午后光线斜照"
+    }
+  ],
+  "run": {
+    "introspection_interval_seconds": 5,
+    "max_simulation_duration_seconds": 8
+  }
+}

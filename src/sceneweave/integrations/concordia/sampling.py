@@ -17,7 +17,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 from urllib.parse import quote
 
 from concordia.language_model import language_model
@@ -26,6 +26,17 @@ from concordia.typing.entity_component import ComponentWithLogging
 from concordia.typing.logging import LoggingChannel
 
 _RECORD_VERSION = 1
+
+
+@runtime_checkable
+class SupportsChannelBinding(Protocol):
+    """采样器可选的公开通道绑定接口；运行层据此注入组件日志通道。
+
+    channel_for 以组件阶段名（system1/world-progress 等）为参数，
+    返回写入同一结构化日志的通道；未绑定的采样器照常工作（无日志）。
+    """
+
+    def bind_channel_for(self, channel_for: Callable[[str], LoggingChannel]) -> None: ...
 
 
 class SamplerComponent(ComponentWithLogging):
@@ -82,6 +93,14 @@ class LanguageModelSampler:
         self._component = SamplerComponent(model)
         self._channel_for = channel_for
 
+    def bind_channel_for(self, channel_for: Callable[[str], LoggingChannel]) -> None:
+        """公开绑定组件日志通道（组件阶段名 → 通道）；供运行层注入。
+
+        不通过私有字段赋值；绑定后每次采样都会经通道写出 Prompt 与
+        Response 原文。重复绑定以最后一次为准。
+        """
+        self._channel_for = channel_for
+
     @property
     def component(self) -> SamplerComponent:
         return self._component
@@ -90,7 +109,22 @@ class LanguageModelSampler:
         if self._channel_for is None:
             return await asyncio.to_thread(self._component.sample, prompt, component=component)
         channel = self._channel_for(component)
-        response = await asyncio.to_thread(self._component.sample, prompt, component=component)
+        try:
+            response = await asyncio.to_thread(self._component.sample, prompt, component=component)
+        except BaseException as error:
+            try:
+                channel(
+                    {
+                        "Key": "sample_text_error",
+                        "Component": component,
+                        "Prompt": prompt,
+                        "ErrorType": f"{type(error).__module__}.{type(error).__qualname__}",
+                        "ErrorMessage": str(error),
+                    }
+                )
+            except Exception as trace_error:
+                error.add_note(f"组件错误日志写入失败：{trace_error}")
+            raise
         channel(
             {
                 "Key": "sample_text",
@@ -238,6 +272,31 @@ class ReplaySampler:
         self._calls = record.calls
         self._index = 0
         self.header: dict[str, Any] = record.header
+        self._channel_for: Callable[[str], LoggingChannel] | None = None
+
+    def bind_channel_for(self, channel_for: Callable[[str], LoggingChannel]) -> None:
+        """公开绑定组件日志通道；重放不建真实模型也能查询组件日志。
+
+        每次回放一条录制（含录制的失败）都经通道写出实际服务的
+        Prompt 与 Response（或错误身份），与真实采样同一格式。
+        """
+        self._channel_for = channel_for
+
+    def _emit_channel(self, prompt: str, component: str, record: dict[str, str]) -> None:
+        if self._channel_for is None:
+            return
+        datum: dict[str, object] = {
+            "Key": "sample_text",
+            "Component": component,
+            "Prompt": prompt,
+            "Response": record.get("response", ""),
+            "Replay": True,
+        }
+        if record["kind"] == "error":
+            datum["Key"] = "sample_text_error"
+            datum["ErrorType"] = record["error_type"]
+            datum["ErrorMessage"] = record["message"]
+        self._channel_for(component)(datum)
 
     async def sample(self, prompt: str, *, component: str) -> str:
         if self._index >= len(self._calls):
@@ -250,7 +309,13 @@ class ReplaySampler:
             )
         self._index += 1
         if record["kind"] == "error":
-            raise RecordedModelError(record["error_type"], record["message"])
+            error = RecordedModelError(record["error_type"], record["message"])
+            try:
+                self._emit_channel(prompt, component, record)
+            except Exception as trace_error:
+                error.add_note(f"组件错误日志写入失败：{trace_error}")
+            raise error
+        self._emit_channel(prompt, component, record)
         return record["response"]
 
     def assert_fully_consumed(self) -> None:

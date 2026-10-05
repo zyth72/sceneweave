@@ -92,17 +92,23 @@ def component_logging_channel(
     component_name: str,
     step: Callable[[], int],
     timestamp: Callable[[], str] | None = None,
+    extra: Callable[[], Mapping[str, Any]] | None = None,
 ) -> LoggingChannel:
     """为 Concordia 组件构造写入同一结构化日志的通道。
 
     Concordia 组件通过 set_logging_channel 接收该通道（真实接入
     路径见 concordia.typing.entity_component.ComponentWithLogging），
     其输出与引擎、角色的追踪记录进入同一 SimulationLog。step 与
-    timestamp 由调用方提供，保持剧情身份与墙钟时间分离。
+    timestamp 由调用方提供，保持剧情身份与墙钟时间分离。extra 在
+    每次写入时补充因果身份（作用域、周期、剧情时刻），覆盖 datum
+    中的同名字段。
     """
     clock = timestamp or (lambda: datetime.now(UTC).isoformat())
 
     def channel(datum: Mapping[str, Any]) -> None:
+        raw = dict(datum)
+        if extra is not None:
+            raw.update(dict(extra()))
         simulation_log.add_entry(
             step=step(),
             timestamp=clock(),
@@ -110,7 +116,7 @@ def component_logging_channel(
             component_name=component_name,
             entry_type="component",
             summary=str(datum.get("Key") or component_name),
-            raw_data=dict(datum),
+            raw_data=raw,
         )
 
     return channel

@@ -48,6 +48,15 @@ src/sceneweave/
 ├── roles/components/             # System1/2/3 组件与采样器协议、阶段留痕
 ├── translator/base.py            # 行动翻译器可注入契约
 ├── translator/model_translator.py # 模型驱动翻译器（作用域采样装配、严格结构校验）
+├── config/loader.py              # 严格文件配置加载（场景/角色/事件/运行参数）
+├── app/                          # 统一装配、脚本假模型、运行编排与 UI 页面
+│   ├── assembly.py               # 从配置构建 Scheduler 装配（live/scripted）
+│   ├── scripted.py               # 脚本假模型（从示例提取）
+│   ├── runner.py                 # headless 运行、输出管理、录制/重放
+│   ├── recording.py              # 录放清单、输入绑定与全部作用域消费校验
+│   ├── ui.py                     # 真实 UI 生命周期、周期广播与录放
+│   └── page.py                   # UI 页面资源（textContent 渲染）
+├── __main__.py                   # CLI 统一入口
 └── integrations/concordia/
     ├── entity.py                 # 框架实体接入
     ├── tracing.py                # 领域追踪接入 Concordia 结构化/组件日志
@@ -66,6 +75,59 @@ examples/                       # 场景组装与演示
 **角色** 保存自身认知、意向和内部状态。`Role` 抽象类实现 `perceive(TurnInput)` 与 `rejected(Rejection)` 交互契约：前者接收本轮输入并返回完整主动行为声明，后者接收 World 的打回反馈并返回新的完整声明。`ModelRole`（`roles/model_role.py`）以注入的采样器驱动内部串行的 System1/2/3（同角色由角色锁串行、跨角色并行）：System1 只更新认知并判断是否重新考虑（不重新考虑时返回完整维持集合，终态行动经引擎已知状态对齐排除）；System2 选择/保持/改变/放弃意向；System3 落实为本次完整主动集合（维持/明确修改/一个新增并行组/显式空），做法不可行可内部重做、意向不可行反馈 System2，两类重试有明确上限，解析失败或超限按错误传播、不转换为空声明。角色严格区分候选与已确认行动：新行动只是提议，在引擎登记并经下一轮已知状态确认前不可被维持或修改（身份保留防复用）；明确修改作为待生效候选记录，随被接受的声明确认后才进入有效做法的私人认知；打回候选不提前影响既有安排（放弃/修改都随最终被接受的声明生效）。System2/3 的提示携带原始已知观测、已知自身状态细节、私人认知与可注入的静态背景。模型 JSON 输出经 `roles/model_output.py` 严格校验（类型/必填/未知字段/重复键/非有限常量/矛盾标记/引用冲突）。每份响应的身份在阶段开始前分配并贯穿各阶段留痕；打回反馈只接受当前周期、本角色、当前待检查响应且引用声明内的行动。角色收到的是自己的感知，不是完整世界状态；私人认知不进入他人感知或世界事实。
 
 **Concordia 接入** 放在 `integrations/concordia/` 和必要的自定义角色组件中。领域消息、World 接口和响应屏障不导入框架（有测试守护该边界）。`integrations/concordia/tracing.py` 把领域追踪记录写入锁定版本的 `SimulationLog` 结构化日志，并为 Concordia 组件提供写入同一日志的 logging channel，使感知、响应、检查、打回与错误可沿周期/角色/响应/行动身份检索。`integrations/concordia/control.py` 把锁定版本的 `StepController` 适配为引擎运行门（运行、暂停、继续、单步、停止；许可在每个完整周期前的安全边界取得——初始化也是安全边界，首次事件处理前先等待许可；等待不占用事件循环，取消与停止释放等待线程；暂停不打断 World 提交、不推进剧情时钟），并把单周期报告转换为真实 `StepData` 广播给 `SimulationServer`——包含剧情毫秒、同刻全部事件（含行动节点类型与身份）、完整主动声明、登记后的行动记录、World 实际行动与被动过程的客观诊断、角色可见感知与自身行动状态、事实增量与结算结果、诊断变化原因；运行结束时以真实最终时刻与停止原因构造收尾步数据，不复播旧报告。观察者/诊断内容不进入角色感知。Concordia 的默认循环不能自动替代本项目的调度约定。
+
+## 配置与统一运行入口
+
+`config/loader.py` 提供严格文件配置加载（`load_assembly_config`；`load_run_config` 兼容核心文档的两字段秒配置）：JSON 所有层级必填/未知/重复键/类型/bool-as-number/nonfinite 严格校验（错误带路径/字段），场景从 `scene_path` 显式加载（相对路径基于配置文件目录，不依赖进程 cwd），参与角色必须覆盖场景 kind=角色对象且不重复/不存在（预检在模型/服务器/输出文件创建前），初始事件秒统一转整数毫秒。加载不创建任务/模型/网络/日志。
+
+统一命令 `uv run --locked python -m sceneweave <config> [mode]`：
+
+```bash
+# scripted 模式：脚本假模型，不调用真实 API
+uv run --locked python -m sceneweave examples/configs/run.json \
+    --scripted examples/configs/scripted.json
+
+# live 模式：真实 LanguageModel 工厂（用户注入，不自动选择供应商）
+uv run --locked python -m sceneweave config.json \
+    --live my_module:my_factory --live-options '{"model": "xxx"}'
+
+# 录制与重放
+uv run --locked python -m sceneweave config.json --scripted script.json --record record_dir
+uv run --locked python -m sceneweave config.json --replay record_dir
+
+# UI 模式：真实 SimulationServer（默认 8080；传 0 由系统分配端口）
+uv run --locked python -m sceneweave config.json --scripted script.json --ui 8080
+uv run --locked python -m sceneweave config.json --scripted script.json --ui 0
+
+# UI 同样支持录制和重放
+uv run --locked python -m sceneweave config.json --scripted script.json --record record_dir --ui
+uv run --locked python -m sceneweave config.json --replay record_dir --ui
+```
+
+`--live` 的工厂签名是 `(scope: str, options: dict) -> LanguageModel`（Concordia 2.4 锁定版本的 `LanguageModel` 抽象类，须继承并实现 `sample_text`/`sample_choice`），各作用域实例独立；不自动选择 API/模型、不静默 fallback 为假模型。工厂接口示意（真实供应商调用由用户注入，未在当前环境验证）：
+
+```python
+# my_module.py — 接口示意，不是可复制代码
+from concordia.language_model import language_model
+
+class MyModel(language_model.LanguageModel):
+    # 用户自行实现 sample_text/sample_choice，调用自己的模型后端
+    ...
+def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
+    return MyModel()
+```
+
+统一入口使用 Concordia 的 `LanguageModel` 抽象接口，具体模型后端由工厂注入。
+
+作用域命名空间（避免角色 ID 与 World 作用域碰撞）：`role:{角色}`、`translator:{角色}`、`world:check:{角色}`、`world:progress`、`world:adjudicate`，每作用域采样器只构造一次并缓存，录制目录按作用域独立文件。角色私人 background 只进该角色的 `ModelRole` 提示，不进入 World 场景或其他任何作用域的提示（有测试断言零泄漏）。
+
+每次运行输出目录独立（默认 `sceneweave-runs/run-{id}`，可用 `--output` 指定；已有目录不覆盖；录制目录与输出目录不得相同或嵌套），包含 JSON 结构化日志、运行概要（停止原因/最终时刻/完成周期数/世界版本），录制运行额外写入 manifest（绑定实际场景事实、角色私人背景、初始事件、运行参数、运行身份与全部作用域；成功及失败运行均保存）。运行错误以非零退出并保存引擎错误快照；成功运行若导出 IO 失败同样非零退出（链式保留 IO 原因）；取消/异常的概要从引擎公开状态读取真实时刻与已完成周期，不伪造零值。`--record` 与 `--replay` 互斥；重放只使用录制目录，不导入 live 工厂，成功导出前校验录制条目全部消费，剩余或请求错配明确失败。
+
+真实模型采样（live）与重放回放的组件日志写入同一 `SimulationLog`：每次采样以 `entry_type=component` 记录 Prompt/Response 原文与作用域、周期、剧情时刻身份（step 取自周期索引，不以墙钟冒充剧情时间）；重放不建真实模型，但每次回放的服务内容同样可查询。采样器错误日志保留原始异常，错误追踪失败作为附加说明；组件通道由运行编排注入（采样器公开 `bind_channel_for`），采样器自身不创建日志。
+
+## UI 运行
+
+统一入口 `--ui [PORT]` 启动真实 Concordia `SimulationServer` + `StepControllerGate`：初始暂停在首次事件前（无模型调用），单步完成一个完整事件周期，play 连续运行、pause/stop 如实生效；每个已完成周期广播一次真实 `StepData`（同刻事件、各角色完整声明与可见感知、World 事实与结算、诊断），运行结束广播真实最终状态（最终时刻/停止原因/错误/世界版本），页面保留至回车/EOF/Ctrl+C 后关闭服务器与线程。端口 0 时实际地址在启动后打印。合法角色身份若与界面保留键冲突，则使用唯一呈现别名并保留原始 `role_id`，避免覆盖 World 事实或诊断。`SimulationServer` 按框架默认绑定全部网络接口，请在可信环境运行，不要公开部署。
 
 ## 演示运行
 
@@ -87,7 +149,7 @@ UI 页面经 SSE 接收真实 `StepData`，按钮驱动真实 `StepController` �
 
 ## 当前实现范围
 
-已按[模块交互契约](docs/模块交互契约.md)实现跨模块消息与身份：处理周期、角色、响应、行动、提交组与共同世界状态版本均有明确身份；消息为不可变结构（嵌套集合一律元组、映射冻结为只读视图），构造时校验非空身份、字段类型、行动归属、重复身份与关联一致性，bool 不会被当作整数时间。剧情时间为非负整数毫秒，秒配置经 `domain/time.py` 的入口转换函数转为整毫秒，无法整毫秒表示、负数与非有限值直接拒绝；尚未实现从文件加载配置的加载器（`RunConfig.from_seconds` 是当前入口）。
+已按[模块交互契约](docs/模块交互契约.md)实现跨模块消息与身份：处理周期、角色、响应、行动、提交组与共同世界状态版本均有明确身份；消息为不可变结构（嵌套集合一律元组、映射冻结为只读视图），构造时校验非空身份、字段类型、行动归属、重复身份与关联一致性，bool 不会被当作整数时间。剧情时间为非负整数毫秒，秒配置经 `domain/time.py` 的入口转换函数转为整毫秒，无法整毫秒表示、负数与非有限值直接拒绝；文件配置加载见「配置与统一运行入口」。
 
 `Role` 抽象类实现 `async perceive(TurnInput)` 与 `async rejected(Rejection)` 契约。`RoleResponse` 携带周期/角色/响应身份与一份必须显式提供的完整主动行为集合，其中维持声明、明确修改与本次新行动并行组三类在类型上可区分；合法空集合表示撤回全部主动维持。
 
@@ -99,4 +161,4 @@ Concordia 接入：结构化/组件日志见 `integrations/concordia/tracing.py`
 
 模型驱动的 System1/2/3 已由 `ModelRole` 与 `roles/components/` 落实：组件经可注入的 `TextSampler` 协议调用模型，`integrations/concordia/sampling.py` 提供真实 Concordia `LanguageModel` 的异步桥（采样经真实 `ComponentWithLogging` 组件把原始输入/输出写入 `SimulationLog`；`channel_for` 按阶段建立通道，datum 标记实际阶段），以及按作用域（角色）隔离的录制/重放：跨角色并行采样的完成顺序不确定，共享单个录制文件无法重放，`RecordingDirectory`/`ReplayDirectory` 为每个角色生成独立文件即可确定性重放整个多角色运行；录制包含失败调用（重放重现原错误身份），请求逐条严格匹配、错配不消费记录。注意：线程中的同步模型调用无法被硬取消——取消/超时只放弃等待，底层调用会继续到自然返回。阶段记录（提示、原始输出、解析结果、跳过/重试/错误与周期/角色/响应/行动/剧情时间身份）写入与调度器相同的因果链，追踪器自身失败不掩盖模型/解析异常。每个阶段（含跳过）都有测试与端到端集成（ModelRole + 假 World/Translator + Scheduler + 结构化日志 + StepData，含双角色并行录制重放回归）。生产语义的具体提示工程与真实模型参数调优未在本批验证（测试与演示使用脚本假模型）。
 
-尚未实现：从文件加载配置的加载器与统一运行命令、场景自然结束条件的场景侧定义；场景卡有 JSON 文本入口（`load_scene_card_json`）与 dict 入口（`load_scene_card`），路径由调用方传入，无自动文件扫描；真实 API 上的提示工程与模型参数调优未验证。这些不影响已交付闭环的可运行性——其余缺口以可注入接口承接，示例中的脚本实现明确标注为演示用假件。
+尚未实现：场景自然结束条件的场景侧定义（`should_end` 可由装配注入，具体场景规则需自行提供，时限不是自然结束）；真实 API 上的工厂、提示工程与模型参数调优未验证（组件日志与 UI 以真实服务器与 Concordia `LanguageModel` 假后端的完整链路验证，但未连真实付费 API）。统一入口 `--ui` 已接入真实 `SimulationServer`/`StepControllerGate`/周期与最终广播；组件日志通道由运行编排统一注入（含录制/重放模式）。其余缺口以可注入接口承接，示例中的脚本实现明确标注为演示用假件（脚本世界裁决的内置逻辑仅为演示行走语义，不是通用 World 物理；显式提供的 World 组件脚本优先执行，耗尽直接报错）。

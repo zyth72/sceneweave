@@ -515,9 +515,10 @@ def test_concordia_component_logging_channel_writes_into_simulation_log() -> Non
 def test_domain_world_engine_do_not_import_concordia() -> None:
     root = Path(__file__).resolve().parent.parent / "src" / "sceneweave"
     integrations = root / "integrations"
+    app = root / "app"  # 装配层（使用 integrations，不是领域模块）
     offenders: list[Path] = []
     for path in sorted(root.rglob("*.py")):
-        if integrations in path.parents:
+        if integrations in path.parents or app in path.parents:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):

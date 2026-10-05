@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from concordia.environment.step_controller import StepController, StepData
 
 from sceneweave.domain.adjudication import WorldDiagnostic
+from sceneweave.domain.identity import RoleId
 from sceneweave.engine.actions import ActionRecord
 from sceneweave.engine.report import CycleReport
 from sceneweave.engine.scheduler import RunResult
@@ -77,6 +78,22 @@ def _diagnostic_entries(diagnostic: WorldDiagnostic) -> dict[str, object]:
     }
 
 
+def _role_entity_keys(role_ids: tuple[RoleId, ...]) -> dict[RoleId, str]:
+    """界面保留键不能被合法角色身份覆盖；普通身份保持既有呈现。"""
+    reserved = {"world", "diagnostics"}
+    used = reserved | set(role_ids)
+    result: dict[RoleId, str] = {}
+    for role_id in role_ids:
+        key = str(role_id)
+        if key in reserved:
+            key = f"role:{role_id}"
+            while key in used:
+                key = f"role:{key}"
+            used.add(key)
+        result[role_id] = key
+    return result
+
+
 def step_data_from_report(report: CycleReport, *, acting_entity: str = "scheduler") -> StepData:
     """把一个完整事件周期的报告转换为界面步数据。
 
@@ -85,6 +102,7 @@ def step_data_from_report(report: CycleReport, *, acting_entity: str = "schedule
     原因。这些内容只进入界面，不会进入任何角色的感知。
     """
     entity_actions: dict[str, str] = {}
+    role_keys = _role_entity_keys(tuple(view.role_id for view in report.roles))
     entity_logs: dict[str, dict[str, object]] = {
         "world": {
             "simulation_time_ms": report.simulation_time,
@@ -120,10 +138,11 @@ def step_data_from_report(report: CycleReport, *, acting_entity: str = "schedule
         },
     }
     for view in report.roles:
-        entity_actions[view.role_id] = (
+        key = role_keys[view.role_id]
+        entity_actions[key] = (
             "；".join(view.declarations) if view.declarations else "（无主动行为声明）"
         )
-        entity_logs[view.role_id] = {
+        entity_logs[key] = {
             "perceptions": list(view.perceptions),
             "action_states": [
                 {
@@ -134,6 +153,8 @@ def step_data_from_report(report: CycleReport, *, acting_entity: str = "schedule
                 for state in view.action_states
             ],
         }
+        if key != view.role_id:
+            entity_logs[key]["role_id"] = view.role_id
     current = "；".join(f"{event.kind} {event.event_id}" for event in report.batch_events)
     if report.introspection:
         current = f"{current}（含周期性内思考）" if current else "周期性内思考"
@@ -179,10 +200,14 @@ def final_step_data(
     }
     entity_actions: dict[str, str] = {}
     if last_report is not None:
+        role_keys = _role_entity_keys(tuple(view.role_id for view in last_report.roles))
         for view in last_report.roles:
-            entity_actions[view.role_id] = (
+            key = role_keys[view.role_id]
+            entity_actions[key] = (
                 "；".join(view.declarations) if view.declarations else "（无主动行为声明）"
             )
+            if key != view.role_id:
+                entity_logs[key] = {"role_id": view.role_id}
     detail = f"运行结束：{result.reason.value}，最终剧情时刻 {result.final_time} 毫秒"
     if result.error:
         detail = f"{detail}；错误：{result.error}"
