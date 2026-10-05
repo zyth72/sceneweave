@@ -18,6 +18,7 @@ from sceneweave.domain.identity import (
     RoleId,
     WorldStateVersion,
     require_identifier,
+    require_unique_identifiers,
     require_version,
 )
 from sceneweave.domain.messages import (
@@ -70,13 +71,15 @@ class CycleOutcome:
     """全部角色完成后整体返回的本轮结果；保留响应与提交组边界。
 
     键必须与各响应的角色身份一致，检查所依据的世界状态版本必须与
-    本轮固定版本一致。
+    本轮固定版本一致。used_response_ids 记录本轮（含打回过程中）
+    已使用的响应身份，供后段翻译重试延续同一周期内的唯一性检查。
     """
 
     cycle_id: CycleId
     simulation_time: SimulationTime
     world_state_version: WorldStateVersion
     accepted: Mapping[RoleId, AcceptedResponse]
+    used_response_ids: tuple[ResponseId, ...] = ()
 
     def __post_init__(self) -> None:
         require_identifier(self.cycle_id, "周期身份")
@@ -94,6 +97,9 @@ class CycleOutcome:
                 raise ValueError(f"响应周期与本轮不一致：{key}")
             if item.check.world_state_version != self.world_state_version:
                 raise ValueError(f"检查依据的世界状态版本与本轮不一致：{key}")
+        if not isinstance(self.used_response_ids, tuple):
+            raise ValueError("已使用响应身份必须是元组")
+        require_unique_identifiers(self.used_response_ids, "已使用响应身份")
         object.__setattr__(self, "accepted", MappingProxyType(dict(self.accepted)))
 
 
@@ -187,6 +193,7 @@ class ResponseRunner:
                 simulation_time=simulation_time,
                 world_state_version=base_version,
                 accepted=MappingProxyType(accepted),
+                used_response_ids=tuple(sorted(used_response_ids, key=str)),
             )
         except asyncio.CancelledError:
             self._safe_trace_cycle(cycle_id, simulation_time, "cycle.cancelled", "周期被取消")

@@ -11,10 +11,14 @@ from typing import Any
 import pytest
 
 from sceneweave.domain.adjudication import (
+    ActionModificationNode,
     AdjudicationCandidate,
     AdjudicationCommit,
     AdjudicationValidation,
     FactChangeProposal,
+    ObjectiveContext,
+    ProgressUpdate,
+    WorldDiagnostic,
 )
 from sceneweave.domain.identity import (
     ActionId,
@@ -34,6 +38,7 @@ from sceneweave.domain.messages import (
     RoleResponse,
 )
 from sceneweave.domain.time import SimulationTime
+from sceneweave.domain.translation import TranslationRequest
 from sceneweave.world.base import World
 
 
@@ -49,6 +54,19 @@ class MiniWorld(World):
     @property
     def state_version(self) -> WorldStateVersion:
         return self._version
+
+    async def update_progress(
+        self, cycle_id: CycleId, simulation_time: SimulationTime
+    ) -> ProgressUpdate:
+        return ProgressUpdate(cycle_id=cycle_id, simulation_time=simulation_time)
+
+    def translation_context(self, role_id: RoleId) -> ObjectiveContext:
+        return ObjectiveContext(
+            world_state_version=self._version, role_id=role_id, conditions=("无特殊客观条件",)
+        )
+
+    def diagnostic_snapshot(self) -> WorldDiagnostic:
+        return WorldDiagnostic(world_state_version=self._version)
 
     async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
         blocked = tuple(
@@ -131,6 +149,40 @@ class MiniWorld(World):
 
 def check(coro: Any) -> Any:
     return asyncio.run(coro)
+
+
+@pytest.mark.parametrize(
+    "field", ["old_start", "new_start", "old_expected_end", "new_expected_end"]
+)
+@pytest.mark.parametrize("invalid", [True, -1, 0.5])
+def test_modification_times_reject_non_integer_and_negative_values(field, invalid) -> None:
+    fields = dict(
+        event_id=EventId("modify-1"),
+        action_id=ActionId("walk"),
+        role_id=RoleId("alice"),
+        description="走路",
+        change="放慢",
+        old_start=SimulationTime(0),
+        old_expected_end=SimulationTime(100),
+        old_checkpoints=(),
+        new_start=SimulationTime(0),
+        new_expected_end=SimulationTime(200),
+        new_checkpoints=(),
+    )
+    fields[field] = invalid
+    with pytest.raises(ValueError):
+        ActionModificationNode(**fields)
+
+
+def test_translation_rejects_context_from_another_world_version() -> None:
+    declaration = RoleResponse(CycleId("cycle-1"), RoleId("alice"), ResponseId("r-1"), ())
+    with pytest.raises(ValueError, match="共同世界状态版本"):
+        TranslationRequest(
+            response=declaration,
+            current_time=SimulationTime(100),
+            world_state_version=WorldStateVersion(2),
+            objective_context=ObjectiveContext(WorldStateVersion(1), RoleId("alice"), ("旧位置",)),
+        )
 
 
 def test_check_response_is_side_effect_free() -> None:

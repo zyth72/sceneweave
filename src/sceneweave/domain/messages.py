@@ -53,13 +53,19 @@ __all__ = [
 
 
 class ActionPhase(enum.StrEnum):
-    """角色可获知的行动阶段；提交、开始、完成、失败与未确认保持可区分。"""
+    """角色可获知的行动阶段；提议、登记、开始、完成、失败、未确认与撤回保持可区分。
+
+    引擎登记记录与角色可见状态共用该词汇：REGISTERED 表示已登记等待
+    开始，WITHDRAWN 表示角色撤回主动维持（客观结果另由 World 结算）。
+    """
 
     SUBMITTED = "submitted"
+    REGISTERED = "registered"
     STARTED = "started"
     COMPLETED = "completed"
     FAILED = "failed"
     UNCONFIRMED = "unconfirmed"
+    WITHDRAWN = "withdrawn"
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,6 +9,11 @@ from typing import Any
 
 import pytest
 
+from sceneweave.domain.adjudication import (
+    ObjectiveContext,
+    ProgressUpdate,
+    WorldDiagnostic,
+)
 from sceneweave.domain.identity import (
     ActionId,
     CommitGroupId,
@@ -139,6 +144,19 @@ class ScriptedWorld(World):
     @property
     def state_version(self) -> WorldStateVersion:
         return self._version
+
+    async def update_progress(
+        self, cycle_id: CycleId, simulation_time: SimulationTime
+    ) -> ProgressUpdate:
+        return ProgressUpdate(cycle_id=cycle_id, simulation_time=simulation_time)
+
+    def translation_context(self, role_id: RoleId) -> ObjectiveContext:
+        return ObjectiveContext(
+            world_state_version=self._version, role_id=role_id, conditions=("无特殊客观条件",)
+        )
+
+    def diagnostic_snapshot(self) -> WorldDiagnostic:
+        return WorldDiagnostic(world_state_version=self._version)
 
     async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
         self.checked.append(candidate)

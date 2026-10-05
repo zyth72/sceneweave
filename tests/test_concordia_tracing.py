@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,11 @@ from concordia.typing.entity_component import ComponentWithLogging
 from concordia.utils import structured_logging
 from concordia.utils.structured_logging import AIAgentLogInterface
 
+from sceneweave.domain.adjudication import (
+    ObjectiveContext,
+    ProgressUpdate,
+    WorldDiagnostic,
+)
 from sceneweave.domain.identity import (
     ActionId,
     CommitGroupId,
@@ -74,6 +80,21 @@ class CheckingWorld(World):
     @property
     def state_version(self) -> WorldStateVersion:
         return WorldStateVersion(0)
+
+    async def update_progress(
+        self, cycle_id: CycleId, simulation_time: SimulationTime
+    ) -> ProgressUpdate:
+        return ProgressUpdate(cycle_id=cycle_id, simulation_time=simulation_time)
+
+    def translation_context(self, role_id: RoleId) -> ObjectiveContext:
+        return ObjectiveContext(
+            world_state_version=self.state_version,
+            role_id=role_id,
+            conditions=("无特殊客观条件",),
+        )
+
+    def diagnostic_snapshot(self) -> WorldDiagnostic:
+        return WorldDiagnostic(world_state_version=self.state_version)
 
     async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
         blocked = tuple(
@@ -527,3 +548,128 @@ def test_tracer_rejects_empty_stage() -> None:
             simulation_time=SimulationTime(1),
             summary="摘要",
         )
+
+
+def test_full_scheduler_run_is_searchable_in_simulation_log() -> None:
+    """完整调度闭环接入结构化日志：关键输入/输出可沿因果链检索。"""
+
+    from sceneweave.domain.identity import ActionId
+    from sceneweave.domain.messages import MaintainAction, NewAction, WorldEvent
+    from sceneweave.engine.config import RunConfig
+    from sceneweave.engine.scheduler import RunStopReason, Scheduler
+    from tests.fakes import FakeSemanticWorld, ScriptedTranslator
+
+    log = structured_logging.SimulationLog()
+    tracer = SimulationLogTracer(log, wall_clock=lambda: FIXED_CLOCK)
+
+    class RetryingThenRunning(Role):
+        def __init__(self) -> None:
+            self.rounds = 0
+
+        @property
+        def role_id(self) -> RoleId:
+            return RoleId("lin_zhou")
+
+        async def perceive(self, turn: TurnInput) -> RoleResponse:
+            self.rounds += 1
+            if self.rounds == 1:
+                return RoleResponse(
+                    turn.cycle_id,
+                    self.role_id,
+                    ResponseId("lin-1"),
+                    (NewAction(ActionId("a-late"), "立刻开始", CommitGroupId("g1")),),
+                )
+            if self.rounds >= 4:
+                # t=4000 结束节点先结算完成，此后空声明（终态无需维持）。
+                return RoleResponse(turn.cycle_id, self.role_id, ResponseId("lin-idle"), ())
+            return RoleResponse(
+                turn.cycle_id,
+                self.role_id,
+                ResponseId(f"lin-keep-{self.rounds}"),
+                (MaintainAction(ActionId("a-walk")),),
+            )
+
+        async def rejected(self, feedback: Any) -> RoleResponse:
+            # 时间安排被打回后返回新的完整声明（同周期、不重投感知）。
+            return RoleResponse(
+                feedback.cycle_id,
+                self.role_id,
+                ResponseId("lin-2"),
+                (NewAction(ActionId("a-walk"), "走向书桌", CommitGroupId("g2")),),
+            )
+
+    class RejectTooEarly(ScriptedTranslator):
+        async def translate(self, request):  # type: ignore[no-untyped-def]
+            result = await super().translate(request)
+            if request.response.response_id == "lin-1":
+                # 时间约束不合法：触发引擎侧打回（不是角色侧）。
+                import dataclasses
+
+                bad = dataclasses.replace(
+                    result.schedules[0],
+                    start=request.current_time,
+                    expected_end=SimulationTime(request.current_time + 100),
+                )
+                import sceneweave.domain.translation as translation_mod
+
+                return translation_mod.TranslationResult(
+                    result.cycle_id, result.role_id, result.response_id, (bad,)
+                )
+            return result
+
+    world = FakeSemanticWorld(["lin_zhou"])
+    world.set_speed("a-walk", 0.001)
+    scheduler = Scheduler(
+        roles=[RetryingThenRunning()],
+        world=world,
+        translator=RejectTooEarly(plans={"走向书桌": (1000, 3000, (1000,))}),
+        config=RunConfig(
+            introspection_interval=SimulationTime(10_000),
+            max_duration=SimulationTime(10_000),
+        ),
+        initial_events=[WorldEvent(EventId("startup"), SimulationTime(0), "书房安静")],
+        tracer=tracer,
+    )
+
+    async def scenario() -> None:
+        result = await scheduler.run()
+        assert result.reason is RunStopReason.TIME_LIMIT
+
+    asyncio.run(scenario())
+
+    def raw(entry: Any) -> dict[str, Any]:
+        return dict(log.reconstruct_value(entry.deduplicated_data))
+
+    # 引擎/世界/角色/翻译的阶段都可检索。
+    stages = {entry.component_name for entry in log.entries}
+    assert {
+        "engine.cycle_start",
+        "world.progress",
+        "world.adjudicate",
+        "world.validate",
+        "world.commit",
+        "world.publish",
+        "role.perceive",
+        "role.response",
+        "translation.request",
+        "translation.result",
+        "registration.rejected",
+        "registration.plan",
+        "registration.commit",
+        "translation.skipped",
+    } <= stages
+    # 翻译请求携带 World 客观上下文与既有安排（不是只记录成功摘要）。
+    requests = [raw(e) for e in log.get_entries_by_component("translation.request")]
+    first = next(r for r in requests if r["response_id"] == "lin-2")
+    assert any("位置" in item for item in first["inputs"]), "客观上下文进入日志"
+    assert any("a-walk" in item or "新增" in item for item in first["outputs"])
+    # 世界裁决记录携带节点内容与修改输入。
+    adjudications = [raw(e) for e in log.get_entries_by_component("world.adjudicate")]
+    start_entry = next(r for r in adjudications if any("start:" in item for item in r["inputs"]))
+    assert any("走向书桌" in item for item in start_entry["inputs"]), "节点描述进入日志"
+    # 登记计划输出包含完整时间安排。
+    plans = [raw(e) for e in log.get_entries_by_component("registration.plan")]
+    assert any("a-walk:" in item for p in plans for item in p["outputs"])
+    # JSON 导出可离线检索（往返解析）。
+    payload = json.loads(log.to_json())
+    assert payload["entries"], "结构化日志可导出为 JSON"

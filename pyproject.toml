@@ -30,6 +30,8 @@ module = [
     "concordia.typing.entity",
     "concordia.typing.logging",
     "concordia.utils.structured_logging",
+    "concordia.environment.step_controller",
+    "concordia.utils.simulation_server",
 ]
 follow_untyped_imports = true
 
