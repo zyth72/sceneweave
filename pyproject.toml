@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "gdm-concordia>=2.4,<3",
+    "openai>=2.54,<3",
 ]
 
 [build-system]

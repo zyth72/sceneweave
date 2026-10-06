@@ -88,7 +88,13 @@ def build_live_factory(
     def factory(scope: str) -> TextSampler:
         if scope in cache:
             return cache[scope]
-        model = raw_factory(scope, opts)
+        try:
+            model = raw_factory(scope, opts)
+        except ValueError as error:
+            # 用户注入的工厂（含内置适配器）以 ValueError 报配置失败时，
+            # 在装配边界转为 AssemblyError，使 CLI 已有错误处理生效；
+            # 保留 cause，不吞其它异常类型。
+            raise AssemblyError(f"live 工厂配置失败（scope={scope}）：{error}") from error
         if not isinstance(model, language_model.LanguageModel):
             raise AssemblyError(
                 f"live 工厂返回类型必须是 LanguageModel（scope={scope}），"
