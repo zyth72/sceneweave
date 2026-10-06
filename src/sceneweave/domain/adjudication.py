@@ -11,7 +11,9 @@
 """
 
 import enum
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from sceneweave.domain.identity import (
     ActionId,
@@ -345,3 +347,64 @@ class AdjudicationCommit:
         for item in self.action_outcomes:
             if proposed.get(item.action_id) != item:
                 raise ValueError(f"提交的结算结果必须来自候选：{item.action_id}")
+
+
+# ---- 结算结果与节点类型的兼容规则（引擎预检与 World 提示共用归口） ----
+
+# 兼容表：开始节点不得直接得到完成，结束节点不得得到开始等。
+# World 可返回进行中/未确认；引擎不自行判成功。
+NODE_ALLOWED_RESULTS: Mapping[ActionNodeKind, frozenset[ActionOutcomeResult]] = MappingProxyType(
+    {
+        ActionNodeKind.START: frozenset(
+            {
+                ActionOutcomeResult.STARTED,
+                ActionOutcomeResult.FAILED,
+                ActionOutcomeResult.UNCONFIRMED,
+            }
+        ),
+        ActionNodeKind.CHECKPOINT: frozenset(
+            {
+                ActionOutcomeResult.IN_PROGRESS,
+                ActionOutcomeResult.COMPLETED,
+                ActionOutcomeResult.FAILED,
+                ActionOutcomeResult.UNCONFIRMED,
+            }
+        ),
+        ActionNodeKind.END: frozenset(
+            {
+                ActionOutcomeResult.COMPLETED,
+                ActionOutcomeResult.FAILED,
+                ActionOutcomeResult.UNCONFIRMED,
+            }
+        ),
+        ActionNodeKind.WITHDRAWN: frozenset(
+            {ActionOutcomeResult.IN_PROGRESS, ActionOutcomeResult.UNCONFIRMED}
+        ),
+    }
+)
+# 修改裁决只报告进展或未知：行动的实际结束仍在其（新）结束节点结算。
+REGISTRATION_ALLOWED_RESULTS = frozenset(
+    {ActionOutcomeResult.IN_PROGRESS, ActionOutcomeResult.UNCONFIRMED}
+)
+
+
+def allowed_results_by_action(
+    nodes: Iterable[AdjudicationActionNode] = (),
+    modifications: Iterable[ActionModificationNode] = (),
+) -> Mapping[ActionId, frozenset[ActionOutcomeResult]]:
+    """本轮 action_id 到允许结算结果的映射；同身份多节点/修改取并集。
+
+    节点的规则与修改的规则分别并入同一身份的允许集合，语义与引擎
+    原实现一致（绝不取交集缩小）；引擎预提交校验与 World 提示共用
+    此入口，避免同一规则两处漂移。
+    """
+    allowed: dict[ActionId, frozenset[ActionOutcomeResult]] = {}
+    for node in nodes:
+        allowed[node.action_id] = (
+            allowed.get(node.action_id, frozenset()) | NODE_ALLOWED_RESULTS[node.node]
+        )
+    for modification in modifications:
+        allowed[modification.action_id] = (
+            allowed.get(modification.action_id, frozenset()) | REGISTRATION_ALLOWED_RESULTS
+        )
+    return MappingProxyType(allowed)

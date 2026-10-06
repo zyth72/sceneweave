@@ -1079,6 +1079,64 @@ def test_outcome_incompatible_with_node_is_refused_before_fact_commit() -> None:
     asyncio.run(scenario())
 
 
+def test_precheck_shares_node_and_modification_rules() -> None:
+    """预检直接消费归口映射：撤回可无 outcome，修改不得 failed/completed。"""
+    from sceneweave.domain.adjudication import (
+        ActionModificationNode,
+        ActionOutcome,
+        AdjudicationActionNode,
+        allowed_results_by_action,
+    )
+    from sceneweave.domain.identity import CycleId, RoleId
+    from sceneweave.domain.messages import ActionPhase
+    from sceneweave.engine.actions import ActionRecord, outcome_transition_problems
+
+    record = ActionRecord(
+        action_id=ActionId("a-1"),
+        role_id=RoleId("alice"),
+        description="动作",
+        phase=ActionPhase.STARTED,
+        start=ms(1000),
+        expected_end=ms(2000),
+        checkpoints=(),
+        registered_cycle=CycleId("cycle-1"),
+    )
+    withdrawn = AdjudicationActionNode(
+        event_id=EventId("event-w"),
+        action_id=ActionId("a-1"),
+        role_id=RoleId("alice"),
+        node=ActionNodeKind.WITHDRAWN,
+        description="撤回",
+        start=ms(1000),
+        expected_end=ms(2000),
+    )
+    modification = ActionModificationNode(
+        event_id=EventId("event-m"),
+        action_id=ActionId("a-1"),
+        role_id=RoleId("alice"),
+        description="动作",
+        change="放慢",
+        old_start=ms(1000),
+        old_expected_end=ms(2000),
+        old_checkpoints=(),
+        new_start=ms(1000),
+        new_expected_end=ms(3000),
+        new_checkpoints=(),
+    )
+    allowed = allowed_results_by_action((withdrawn,), (modification,))
+    assert allowed[ActionId("a-1")] == frozenset(
+        {ActionOutcomeResult.IN_PROGRESS, ActionOutcomeResult.UNCONFIRMED}
+    )
+    # 没有 outcome（撤回可不提供）不产生问题。
+    assert outcome_transition_problems({ActionId("a-1"): record}, (), allowed) == ()
+    problems = outcome_transition_problems(
+        {ActionId("a-1"): record},
+        (ActionOutcome(ActionId("a-1"), ActionOutcomeResult.FAILED, "失败"),),
+        allowed,
+    )
+    assert problems == ("结算结果与节点类型不符：a-1 得到 failed",)
+
+
 def test_unconfirmed_outcome_keeps_future_nodes_and_maintenance() -> None:
     """未确认不是已知客观终止：未来节点保留，行动仍可维持。"""
 

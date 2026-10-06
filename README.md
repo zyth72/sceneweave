@@ -163,7 +163,11 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
 
 0 秒开场事件打开书房照明，并解除文件的暂时禁取状态。World 裁决实际状态变化，经校验、提交后按可见范围投递感知；竞争动机则通过各角色私有 `background` 进入 System1/2/3。配置不会强制 System1 重新考虑，也不会直接登记角色行动。同刻争夺沿用 World 联合裁决与对象树的单一容纳关系。
 
-模型提示沿用既有规范并做了不改变 schema、输出解析与行为代码的补强：System1 区分维持已登记行动与启动新行为；System3 只提交当前可独立结算的步骤；World 检查只把依赖前一步实际结果的后续动作视为串行链，“靠近到可触及位置”等独立移动尝试不因成功未确认被拒；System2 的 `abandon` 只能使用提示中实际列出的可维持行动身份。World 联合裁决提示也明确列出可结算的行动身份，环境事件的变化写入 `changes`，不冒充行动结果。本次演示按 [DeepSeek 思考模式说明](https://api-docs.deepseek.com/guides/thinking_mode/) 显式使用低强度思考（`reasoning_effort=low`），并将输出预算设为 16000 tokens；实际行为以运行记录为准。
+模型提示保持既有 schema 与严格校验：System1 区分维持已登记行动与启动新行为；System3 只提交当前可独立结算的步骤，同一身份在 maintain/modify 中只能出现一次，仅撤回维持时从完整集合中省略。System2 的 `abandon` 只能使用实际列出的可维持行动身份。World 检查区分独立移动尝试与依赖前一步实际结果的后续动作；翻译器只设置必要过程节点，且节点严格位于开始与结束之间。
+
+结算结果与节点类型的允许规则归口在 `domain/adjudication.py`，引擎提交前校验与 World 提示共用同一映射。仅修改或撤回时不得标成 failed/completed；同身份兼有其它节点时以合并的允许集合为准。撤回可不提供 outcome，环境事件只写事实变化，`follow_ups` 只登记独立环境过程，不重复安排已登记行动的节点。
+
+真实 DeepSeek Flash 的 3 秒短运行已正常完成 3 个周期，两名角色均开始取文件；到时限时文件仍在书桌，尚未确定归属。录制离线回放与原概要一致，网页的周期历史、角色/阶段筛选、完整模型输入输出和刷新恢复均已验证。下方默认配置保留 12 秒时限；完整 12 秒运行尚未验证通过。示例命令按 [DeepSeek 思考模式说明](https://api-docs.deepseek.com/guides/thinking_mode/) 使用低强度思考和 16000 tokens 输出预算；上述短运行使用关闭思考的 JSON 输出模式，实际行为以各次记录为准。
 
 从项目根目录运行，使用本机 `.env` 中已配置的 `DEEPSEEK_API_KEY`：
 

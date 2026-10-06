@@ -7,10 +7,17 @@ from typing import Any
 import pytest
 
 from sceneweave.domain.adjudication import (
+    NODE_ALLOWED_RESULTS,
+    REGISTRATION_ALLOWED_RESULTS,
+    ActionModificationNode,
+    ActionNodeKind,
+    ActionOutcomeResult,
+    AdjudicationActionNode,
     AdjudicationCandidate,
     AdjudicationCommit,
     AdjudicationValidation,
     FactChangeProposal,
+    allowed_results_by_action,
 )
 from sceneweave.domain.identity import (
     ActionId,
@@ -414,6 +421,89 @@ class TestAdjudicationMessages:
         assert [item.description for item in commit.committed_changes] == ["抽屉被拉开"]
         assert commit.candidate is candidate
         assert commit.resulting_version == WorldStateVersion(4)
+
+    def test_allowed_results_helper_keeps_union_for_same_action(self) -> None:
+        """同一身份同时有节点与修改时取并集，不因修改缩小节点规则。"""
+        node = AdjudicationActionNode(
+            event_id=EventId("event-1"),
+            action_id=ActionId("a-1"),
+            role_id=RoleId("alice"),
+            node=ActionNodeKind.START,
+            description="走向书桌",
+            start=SimulationTime(1_000),
+            expected_end=SimulationTime(2_000),
+        )
+        modification = ActionModificationNode(
+            event_id=EventId("event-2"),
+            action_id=ActionId("a-1"),
+            role_id=RoleId("alice"),
+            description="走向书桌",
+            change="放慢速度",
+            old_start=SimulationTime(1_000),
+            old_expected_end=SimulationTime(2_000),
+            old_checkpoints=(),
+            new_start=SimulationTime(1_000),
+            new_expected_end=SimulationTime(3_000),
+            new_checkpoints=(),
+        )
+        merged = allowed_results_by_action((node,), (modification,))
+        assert merged[ActionId("a-1")] == (
+            NODE_ALLOWED_RESULTS[ActionNodeKind.START] | REGISTRATION_ALLOWED_RESULTS
+        )
+        assert ActionOutcomeResult.STARTED in merged[ActionId("a-1")], "并入而非交集"
+
+    def test_allowed_results_follow_node_and_modification_rules(self) -> None:
+        """逐类节点规则固定；明确修改不允许 failed/completed。"""
+        expected = {
+            ActionNodeKind.START: {
+                ActionOutcomeResult.STARTED,
+                ActionOutcomeResult.FAILED,
+                ActionOutcomeResult.UNCONFIRMED,
+            },
+            ActionNodeKind.CHECKPOINT: {
+                ActionOutcomeResult.IN_PROGRESS,
+                ActionOutcomeResult.COMPLETED,
+                ActionOutcomeResult.FAILED,
+                ActionOutcomeResult.UNCONFIRMED,
+            },
+            ActionNodeKind.END: {
+                ActionOutcomeResult.COMPLETED,
+                ActionOutcomeResult.FAILED,
+                ActionOutcomeResult.UNCONFIRMED,
+            },
+            ActionNodeKind.WITHDRAWN: {
+                ActionOutcomeResult.IN_PROGRESS,
+                ActionOutcomeResult.UNCONFIRMED,
+            },
+        }
+        for node_kind, results in expected.items():
+            node = AdjudicationActionNode(
+                event_id=EventId("event-1"),
+                action_id=ActionId("a-1"),
+                role_id=RoleId("alice"),
+                node=node_kind,
+                description="动作",
+                start=SimulationTime(1_000),
+                expected_end=SimulationTime(2_000),
+            )
+            assert allowed_results_by_action((node,), ())[ActionId("a-1")] == frozenset(results)
+        modification = ActionModificationNode(
+            event_id=EventId("event-2"),
+            action_id=ActionId("a-2"),
+            role_id=RoleId("alice"),
+            description="动作",
+            change="调整",
+            old_start=SimulationTime(1_000),
+            old_expected_end=SimulationTime(2_000),
+            old_checkpoints=(),
+            new_start=SimulationTime(1_000),
+            new_expected_end=SimulationTime(3_000),
+            new_checkpoints=(),
+        )
+        only_modification = allowed_results_by_action((), (modification,))
+        assert only_modification[ActionId("a-2")] == REGISTRATION_ALLOWED_RESULTS
+        assert ActionOutcomeResult.FAILED not in only_modification[ActionId("a-2")]
+        assert ActionOutcomeResult.COMPLETED not in only_modification[ActionId("a-2")]
 
 
 class TestDelivery:

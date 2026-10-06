@@ -250,6 +250,10 @@ class ModelTranslator:
             "- modified_schedules 一一对应本次全部明确修改：已开始的行动保持原 start、"
             "已到达的过程节点保持不变，只调整未来节点，"
             "expected_end 晚于当前剧情时刻；",
+            "- 每个安排满足 start < expected_end；checkpoints 严格递增，"
+            "每个节点都满足 start < checkpoint < expected_end，不包含开始或结束时刻；",
+            "- 只为必要的过程检查设置 checkpoints；无必要过程节点时用 []，"
+            "不要机械地为简单动作添加固定比例检查点；",
             "- 维持行动不重新安排；不产生额外行动或未来行动链；",
             "- start/expected_end/checkpoints 是本次提交的执行安排（整数毫秒），不代表已经发生。",
             "只输出一个 JSON 对象，只含这两个字段，格式：",

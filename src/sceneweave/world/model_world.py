@@ -42,6 +42,7 @@ from sceneweave.domain.adjudication import (
     ProgressUpdate,
     WorldActionState,
     WorldDiagnostic,
+    allowed_results_by_action,
 )
 from sceneweave.domain.identity import (
     ActionId,
@@ -1302,6 +1303,13 @@ class ModelWorld(World):
             f"- {action_id}（{m.role_id}）：速度 {m.speed}，方向 ({m.direction[0]:.2f}, {m.direction[1]:.2f})"
             for action_id, m in sorted(self._movements.items(), key=lambda kv: str(kv[0]))
         ]
+        allowed_lines = [
+            f"- {action_id}：" + "、".join(sorted(item.value for item in results))
+            for action_id, results in sorted(
+                allowed_results_by_action(action_nodes, modifications).items(),
+                key=lambda kv: str(kv[0]),
+            )
+        ]
         lines = [
             "你是场景 World 的联合裁决者：对同刻全部事件与行动做一次联合判断。",
             f"当前剧情时刻 {simulation_time} 毫秒；共同世界状态版本 {self._version}。",
@@ -1319,9 +1327,16 @@ class ModelWorld(World):
             *(actual_lines or ["- 无"]),
             "进行中的实际运动：",
             *(movement_lines or ["- 无"]),
+            "本轮各行动允许的结算结果（outcomes.result 只能从对应集合中选择）：",
+            *(allowed_lines or ["- 无"]),
             "要求：",
             "- 联合考虑相互作用，不按插入顺序制造优先级；同刻两人争取同一对象只给一份归属；",
             "- start 节点也可能失败或未确认；到 end 不保证成功；完成/失败/未确认保持区分；",
+            "- 只有 withdrawn 或明确修改时，不标成 failed 或 completed；同一身份兼有其它节点时，"
+            "以本轮对应的允许集合为准。withdrawn 可以不提供 outcome——不再主动维持本身不等于动作失败"
+            "或完成，已发生效果与客观被动过程仍归 World；",
+            "- follow_ups 只登记独立的后续环境过程；已登记 start/checkpoint/end 的行动由引擎调度，"
+            "不得再用 follow_ups 为同一行动生成重复的结束/结算事件；",
             "- outcomes 的 action_id 只能使用下方列出的参与行动身份，不能填写世界事件身份。"
             "只有世界事件、没有参与行动时，outcomes 必须为空数组；环境变化写入 changes。",
             "本轮可结算的行动身份："

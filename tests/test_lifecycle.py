@@ -278,6 +278,57 @@ def test_modification_adjusts_only_future_nodes() -> None:
     asyncio.run(scenario())
 
 
+def test_modification_outcome_failed_is_refused_before_fact_commit() -> None:
+    """明确修改只允许 in_progress/unconfirmed；failed 在事实提交前被拒绝。"""
+
+    async def scenario() -> None:
+        from dataclasses import replace
+
+        from sceneweave.domain.adjudication import ActionOutcomeResult
+
+        class FailedModificationWorld(FakeSemanticWorld):
+            async def adjudicate(self, *args, **kwargs):
+                candidate = await super().adjudicate(*args, **kwargs)
+                if not kwargs.get("modifications"):
+                    return candidate
+                return replace(
+                    candidate,
+                    action_outcomes=tuple(
+                        replace(outcome, result=ActionOutcomeResult.FAILED)
+                        for outcome in candidate.action_outcomes
+                    ),
+                )
+
+        alice = ScriptedRole(
+            "alice",
+            [response("alice", "r-1", (new_action("a-run", "沿走廊跑"),))],
+            fallback=maintaining("alice", "a-run"),
+        )
+        alice.rounds.insert(1, response("alice", "r-2", (modified("a-run", "跑得更久"),)))
+        world = FailedModificationWorld(["alice"])
+        world.set_speed("a-run", 0.001)
+        translator = ScriptedTranslator(
+            plans={"沿走廊跑": (900, 2100, (1000,))},
+            modifications={"a-run": (8100, (2900, 5900))},
+        )
+        scheduler = Scheduler(
+            roles=[alice],
+            world=world,
+            translator=translator,
+            config=RunConfig(introspection_interval=ms(10_000), max_duration=ms(10_000)),
+            initial_events=[startup()],
+        )
+        result = await scheduler.run()
+        assert result.reason is RunStopReason.ERROR
+        assert "结算结果未通过提交前校验" in (result.error or "")
+        assert not any("修改生效" in fact for fact in world.facts), "非法修改没有成为事实"
+        assert scheduler.action_records()[ActionId("a-run")].expected_end == ms(3000), (
+            "原有安排没有被错误改写"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_modification_cannot_rewrite_history_and_is_rejected() -> None:
     """试图改写历史的修改安排被打回角色重新决定，而不是运行错误。"""
 

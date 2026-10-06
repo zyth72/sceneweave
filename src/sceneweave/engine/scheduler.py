@@ -27,13 +27,13 @@ from pathlib import Path
 from sceneweave.domain.adjudication import (
     ActionModificationNode,
     ActionNodeKind,
-    ActionOutcomeResult,
     AdjudicationActionNode,
     AdjudicationCandidate,
     AdjudicationCommit,
     AdjudicationValidation,
     ProgressUpdate,
     WorldDiagnostic,
+    allowed_results_by_action,
 )
 from sceneweave.domain.identity import (
     ActionId,
@@ -89,31 +89,6 @@ _NODE_KINDS: Mapping[ScheduledEventKind, ActionNodeKind] = {
     ScheduledEventKind.ACTION_CHECKPOINT: ActionNodeKind.CHECKPOINT,
     ScheduledEventKind.ACTION_END: ActionNodeKind.END,
 }
-# 结算结果与节点类型的兼容表：开始节点不得直接得到完成，结束节点
-# 不得得到开始等。World 可返回进行中/未确认；引擎不自行判成功。
-_NODE_ALLOWED_RESULTS: Mapping[ActionNodeKind, frozenset[ActionOutcomeResult]] = {
-    ActionNodeKind.START: frozenset(
-        {ActionOutcomeResult.STARTED, ActionOutcomeResult.FAILED, ActionOutcomeResult.UNCONFIRMED}
-    ),
-    ActionNodeKind.CHECKPOINT: frozenset(
-        {
-            ActionOutcomeResult.IN_PROGRESS,
-            ActionOutcomeResult.COMPLETED,
-            ActionOutcomeResult.FAILED,
-            ActionOutcomeResult.UNCONFIRMED,
-        }
-    ),
-    ActionNodeKind.END: frozenset(
-        {ActionOutcomeResult.COMPLETED, ActionOutcomeResult.FAILED, ActionOutcomeResult.UNCONFIRMED}
-    ),
-    ActionNodeKind.WITHDRAWN: frozenset(
-        {ActionOutcomeResult.IN_PROGRESS, ActionOutcomeResult.UNCONFIRMED}
-    ),
-}
-# 修改裁决只报告进展或未知：行动的实际结束仍在其（新）结束节点结算。
-_REGISTRATION_ALLOWED_RESULTS = frozenset(
-    {ActionOutcomeResult.IN_PROGRESS, ActionOutcomeResult.UNCONFIRMED}
-)
 
 
 class RunStopReason(enum.StrEnum):
@@ -845,16 +820,8 @@ class Scheduler:
             ):
                 raise RuntimeError(f"后续世界事件身份冲突：{follow_up.event_id}")
         # 结算结果在提交前预检：未登记、已结束或与节点类型不符都在
-        # 事实提交前发现。
-        allowed: dict[ActionId, frozenset[ActionOutcomeResult]] = {}
-        for node in action_nodes:
-            allowed[node.action_id] = (
-                allowed.get(node.action_id, frozenset()) | _NODE_ALLOWED_RESULTS[node.node]
-            )
-        for modification in modifications:
-            allowed[modification.action_id] = (
-                allowed.get(modification.action_id, frozenset()) | _REGISTRATION_ALLOWED_RESULTS
-            )
+        # 事实提交前发现。允许结果归口在 domain/adjudication.py。
+        allowed = allowed_results_by_action(action_nodes, modifications)
         outcome_problems = outcome_transition_problems(
             self._registry.records, candidate.action_outcomes, allowed
         )
