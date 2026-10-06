@@ -435,6 +435,29 @@ class Scheduler:
         report = await self._run_cycle(next_time)
         self._last_report = report
         self._completed_cycles += 1
+        # 仅追踪：完整周期边界（翻译与统一登记已生效）。
+        # ResponseRunner 的 cycle.complete 只是角色屏障完成，不能替代本边界。
+        self._trace(
+            "engine.cycle_complete",
+            report.cycle_id,
+            report.simulation_time,
+            "完整周期完成",
+            {
+                "completed_cycles": self._completed_cycles,
+                "outcomes": len(report.action_outcomes),
+                "registry_actions": len(report.registry_actions),
+            },
+            # 同一行动身份可能在同周期多条结算里出现；追踪身份去重，
+            # 完整结算明细仍在 outputs。
+            action_ids=tuple(
+                sorted({outcome.action_id for outcome in report.action_outcomes}, key=str)
+            ),
+            outputs=tuple(
+                f"{outcome.action_id}:{outcome.result.value}:{outcome.detail}"
+                for outcome in report.action_outcomes
+            ),
+            world_state_version=self._world.state_version,
+        )
         status = RunStatus(self._time, self._completed_cycles, report)
         if self._should_end is not None and self._should_end(status):
             return self._stop(RunStopReason.NATURAL_END)

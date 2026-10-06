@@ -13,71 +13,141 @@ PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <title>sceneweave 运行调试视图</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 2rem; color: #1c2430;
-         background: #f6f7f9; }
-  h1 { font-size: 1.2rem; }
-  header { display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap; }
+  :root {
+    --ink: #1c2430; --muted: #5b6675; --faint: #7b8694;
+    --line: #e0e5eb; --line-strong: #c9d1db;
+    --accent: #35507a; --blue: #2d5f9e; --green: #2f7d4f;
+    --amber: #7d5800; --red: #a3344f; --bg: #eef1f4; --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { max-width: 1160px; margin: 0 auto; padding: 1.1rem 1.3rem 3rem;
+         font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
+         color: var(--ink); background: transparent; font-size: 15px; line-height: 1.55; }
+  header.top { display: flex; justify-content: space-between; align-items: flex-start;
+               gap: 1rem; flex-wrap: wrap; margin-bottom: .85rem; }
+  h1 { font-size: 1.15rem; margin: 0; letter-spacing: .01em; }
+  .status-strip { display: flex; flex-direction: column; align-items: flex-end;
+                  gap: .1rem; text-align: right; min-width: 0; }
   #time { font-variant-numeric: tabular-nums; font-weight: 700; }
-  button { margin-right: .5rem; padding: .35rem 1rem; cursor: pointer; }
-  button:disabled { cursor: not-allowed; opacity: .5; }
-  main { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit,
-         minmax(360px, 1fr)); margin-top: 1rem; align-items: start; }
-  section { background: white; border: 1px solid #d8dde5; border-radius: 8px;
-            padding: .8rem 1rem; }
-  section h2 { font-size: .95rem; margin: 0 0 .5rem; color: #35507a; }
-  h4 { font-size: .85rem; margin: .6rem 0 .2rem; color: #35507a; }
-  ul { margin: 0; padding-left: 1.1rem; }
-  li { margin: .15rem 0; }
-  .muted { color: #6b7686; }
-  .empty { color: #6b7686; margin: .3rem 0; }
-  .full { grid-column: 1 / -1; }
-  .cycle { border: 1px solid #e2e6ec; border-radius: 6px; margin: .5rem 0;
-           padding: .4rem .6rem; }
-  .cycle > summary { cursor: pointer; font-weight: 600; }
-  .role { border-left: 3px solid #7a9a35; padding-left: .6rem; margin: .5rem 0; }
-  .role h3 { font-size: .9rem; margin: .2rem 0; }
-  .facts li { border-left: 3px solid #7a9a35; padding-left: .5rem; list-style: none; }
-  .registry li, .worlddiag li { list-style: none; }
-  .call { border: 1px solid #e2e6ec; border-radius: 6px; margin: .5rem 0;
-          padding: .4rem .6rem; }
-  .call.error { border-color: #b06; background: #fff5f8; }
+  #events { font-size: .82rem; max-width: 52ch; overflow-wrap: anywhere; }
+  .toolbar { display: flex; gap: 1.4rem; flex-wrap: wrap; align-items: center;
+             background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+             padding: .55rem .8rem; margin-bottom: 1rem; }
+  .control-group { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .group-label { font-size: .76rem; color: var(--faint); letter-spacing: .04em; }
+  button { padding: .36rem .9rem; border: 1px solid var(--line-strong); border-radius: 7px;
+           background: #fff; color: var(--ink); font-size: .87rem; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { cursor: not-allowed; opacity: .45; }
+  select { padding: .3rem .45rem; border: 1px solid var(--line-strong); border-radius: 7px;
+           background: #fff; color: var(--ink); font-size: .87rem; max-width: 100%; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { font-size: .85rem; }
+  #view-note { font-size: .8rem; }
+  main { display: block; }
+  section, details.fold-section { background: var(--card); border: 1px solid var(--line);
+        border-radius: 10px; padding: .85rem 1rem; margin: 0 0 1rem; }
+  section h2 { font-size: .95rem; margin: 0 0 .55rem; color: var(--accent); }
+  h4, .subhead { font-size: .83rem; margin: .55rem 0 .2rem; color: var(--accent); }
+  ul { margin: 0; padding-left: 1.05rem; }
+  li { margin: .18rem 0; overflow-wrap: anywhere; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); margin: .3rem 0; }
+  .cycle { border: 1px solid var(--line); border-left: 3px solid #a9b8cb; border-radius: 8px;
+           margin: .5rem 0; background: #fbfcfd; }
+  .cycle > summary { cursor: pointer; padding: .5rem .7rem; font-weight: 600;
+                     display: flex; gap: .5rem; flex-wrap: wrap; align-items: baseline;
+                     list-style-position: inside; }
+  .cycle-index { font-weight: 700; color: var(--accent); }
+  .cycle-meta { color: var(--muted); font-size: .8rem; font-weight: 400; }
+  .cycle-body { padding: 0 .75rem .7rem; }
+  .chips { display: inline-flex; gap: .3rem; flex-wrap: wrap; }
+  .chip { display: inline-block; padding: .04rem .45rem; border-radius: 999px;
+          font-size: .74rem; border: 1px solid var(--line-strong); color: var(--muted);
+          background: #fff; white-space: nowrap; vertical-align: baseline; }
+  .chip.completed { color: #1f6b43; border-color: #a9d5bb; background: #eefaf3; }
+  .chip.failed { color: #93213c; border-color: #e6b6c2; background: #fdf0f3; }
+  .chip.unconfirmed { color: var(--amber); border-color: #e6d29a; background: #fcf7e8; }
+  .chip.started, .chip.in_progress { color: #24518c; border-color: #b9cce6; background: #eef4fb; }
+  .chip.withdrawn, .chip.submitted, .chip.registered { color: #55606e; background: #f2f4f7; }
+  .roles { display: grid; gap: .55rem; }
+  .role { border: 1px solid var(--line); border-left: 3px solid #7a9a35; border-radius: 8px;
+          padding: .5rem .65rem; background: #fff; }
+  .role h3 { font-size: .9rem; margin: 0 0 .25rem; }
+  .role .declaration { margin: 0 0 .3rem; }
+  .more, .tech { border: 1px solid var(--line); border-radius: 8px; margin: .45rem 0;
+                 padding: .3rem .55rem; background: #fafbfc; }
+  .tech > summary, .more > summary { cursor: pointer; font-size: .83rem; font-weight: 600;
+                                     color: var(--accent); }
+  .facts { border-left: 3px solid #7a9a35; padding-left: .55rem; margin-top: .5rem; }
+  .facts > h4 { margin-top: .2rem; }
+  .facts li, .worlddiag li, .registry li { list-style: none; }
+  .registry, .worlddiag { padding-left: .1rem; }
+  .call { border: 1px solid var(--line); border-radius: 8px; margin: .45rem 0;
+          padding: .4rem .6rem; background: #fff; }
+  .call.error { border-color: #e6b6c2; background: #fdf0f3; }
   .call.skip { background: #f7f8fa; }
-  .call-head { font-size: .88rem; font-weight: 600; }
-  .call-summary { font-size: .85rem; margin-top: .2rem; }
-  .call-meta { color: #6b7686; font-size: .8rem; }
+  .call-head { font-size: .87rem; font-weight: 600; overflow-wrap: anywhere; }
+  .call-summary { font-size: .85rem; margin-top: .18rem; overflow-wrap: anywhere; }
+  .call-meta { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
   .filters { display: flex; gap: .8rem; flex-wrap: wrap; align-items: center;
              margin-bottom: .5rem; }
-  .filters label { font-size: .85rem; color: #35507a; }
-  .views { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
-  .views label { font-size: .85rem; color: #35507a; }
-  .completed-row { border: 1px solid #e2e6ec; border-radius: 6px; margin: .5rem 0;
+  .filters label { font-size: .85rem; color: var(--accent); }
+  .completed-row { border: 1px solid var(--line); border-radius: 8px; margin: .5rem 0;
                    padding: .4rem .6rem; }
-  pre { white-space: pre-wrap; word-break: break-word; background: #f2f4f7;
-        padding: .5rem; border-radius: 4px; max-height: 24rem; overflow: auto; }
+  .transcript { border-left: 3px solid #7a9a35; padding-left: .85rem; }
+  .transcript-line { margin: .5rem 0; }
+  .transcript-text { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
+  .settlement-meta { margin-top: .15rem; font-size: .8rem; color: var(--muted); }
+  details.fold-section > summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+  .audit-model { border: 1px solid var(--line); border-radius: 8px; margin: .5rem 0;
+                 padding: .4rem .6rem; background: #fff; }
+  .audit-model.error { border-color: #e6b6c2; background: #fdf0f3; }
+  .audit-model .call-head { overflow-wrap: anywhere; }
+  pre { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+        background: #f2f4f7; padding: .5rem; border-radius: 6px; max-height: 24rem;
+        overflow: auto; max-width: 100%; }
+  @media (max-width: 600px) {
+    body { padding: .8rem .75rem 2rem; }
+    header.top { flex-direction: column; align-items: stretch; }
+    .status-strip { align-items: flex-start; text-align: left; }
+    .toolbar { gap: .8rem; padding: .5rem .6rem; }
+    .control-group { width: 100%; }
+    .cycle > summary { padding: .45rem .55rem; }
+    .cycle-body { padding: 0 .5rem .55rem; }
+    select { max-width: 100%; }
+  }
 </style>
 </head>
 <body>
-<header>
+<header class="top">
   <h1>sceneweave 运行调试视图</h1>
-  <span id="time">剧情时刻 — ms</span>
-  <span id="events" class="muted"></span>
+  <div class="status-strip">
+    <span id="time">剧情时刻 — ms</span>
+    <span id="events" class="muted"></span>
+  </div>
 </header>
-<p>
-  <button id="btn-play" type="button">运行</button>
-  <button id="btn-pause" type="button">暂停</button>
-  <button id="btn-step" type="button">单步</button>
-  <button id="btn-stop" type="button">停止</button>
-  <span id="status" class="muted"></span>
-</p>
-<p class="views">
-  <label for="view-mode">视图</label>
-  <select id="view-mode">
-    <option value="all">全部过程</option>
-    <option value="completed">只看已完成行动</option>
-  </select>
-  <button id="btn-export" type="button">导出 Markdown</button>
-  <span id="view-note" class="muted"></span>
-</p>
+<div class="toolbar">
+  <div class="control-group">
+    <span class="group-label">运行控制</span>
+    <button id="btn-play" type="button">运行</button>
+    <button id="btn-pause" type="button">暂停</button>
+    <button id="btn-step" type="button">单步</button>
+    <button id="btn-stop" type="button">停止</button>
+    <span id="status" class="muted"></span>
+  </div>
+  <div class="control-group">
+    <span class="group-label">阅读与导出</span>
+    <label for="view-mode">视图</label>
+    <select id="view-mode">
+      <option value="all">全部过程</option>
+      <option value="completed">成功动作转录（只看已完成）</option>
+    </select>
+    <button id="btn-export" type="button">导出 Markdown</button>
+    <span id="view-note" class="muted"></span>
+  </div>
+</div>
 <main>
   <section class="full" id="cycles-section">
     <h2>运行过程（每个完整周期）</h2>
@@ -99,10 +169,14 @@ PAGE = """<!DOCTYPE html>
     </div>
     <div id="calls"></div>
   </section>
-  <section class="full">
-    <h2>最终收尾状态（独立于视图筛选）</h2>
+  <details class="full fold-section" id="final-section" open>
+    <summary>最终收尾状态（独立于视图筛选）</summary>
     <div id="final-state"></div>
-  </section>
+  </details>
+  <details class="full fold-section" id="audit-section" open>
+    <summary>运行后审计（独立于视图筛选；不代表成功动作）</summary>
+    <div id="audit"></div>
+  </details>
 </main>
 <script>
 "use strict";
@@ -113,6 +187,8 @@ let appliedSeq = 0;
 let callItems = [];
 let refreshTimer = null;
 let lastSnapshot = null;
+let auditData = null;
+let lastAppliedView = null;
 let viewMode = "all";
 const NL = String.fromCharCode(10);
 const buttons = {
@@ -134,6 +210,20 @@ function displayMs(value) {
   return typeof value === "number" ? value + " ms" : "—";
 }
 
+function transcriptTime(value) {
+  // 剧情钟 mm:ss[.毫秒最多3位去尾零]；整数毫秒精确保留，分钟不限制两位。
+  if (typeof value !== "number" || !isFinite(value) || value < 0) return "—";
+  const ms = Math.floor(value);
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor(ms / 1000) % 60;
+  const fraction = ms % 1000;
+  let text = String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+  if (fraction !== 0) {
+    text += "." + String(fraction).padStart(3, "0").replace(/0+$/, "");
+  }
+  return text;
+}
+
 function listItem(parent, text, className) {
   const node = element("li", className, text);
   parent.appendChild(node);
@@ -151,6 +241,72 @@ function listBlock(title, texts, emptyText) {
   }
   block.appendChild(list);
   return block;
+}
+
+const PHASE_LABELS = {
+  submitted: "已提交", registered: "已登记等待", started: "已开始", completed: "已完成",
+  failed: "失败", unconfirmed: "未确认（结果未知）", withdrawn: "已撤回",
+};
+const RESULT_LABELS = {
+  started: "已开始", in_progress: "进行中", completed: "已完成", failed: "失败",
+  unconfirmed: "未确认", withdrawn: "已撤回",
+};
+
+function stateChip(code, labels) {
+  const key = String(code === undefined || code === null ? "" : code);
+  return element("span", "chip " + key, (labels[key] || key) + "（" + key + "）");
+}
+
+function phaseChip(phase) {
+  return stateChip(phase, PHASE_LABELS);
+}
+
+function resultChip(result) {
+  return stateChip(result, RESULT_LABELS);
+}
+
+function countChip(code, count) {
+  const key = String(code || "");
+  return element("span", "chip " + key, (RESULT_LABELS[key] || key) + " " + count);
+}
+
+function roleCard(roleLog, key, declaration) {
+  const role = element("div", "role");
+  role.appendChild(element("h3", null, "角色 " + (roleLog.role_id || key)));
+  role.appendChild(element("p", "declaration",
+    "主动声明：" + (declaration || "（无主动行为声明）")));
+  const states = roleLog.action_states || [];
+  if (states.length) {
+    role.appendChild(element("div", "subhead", "自身行动状态"));
+    const list = element("ul");
+    for (const state of states) {
+      const item = element("li");
+      item.appendChild(phaseChip(state.phase));
+      item.appendChild(element("span", null, " " + state.action_id + " — " + state.detail));
+      list.appendChild(item);
+    }
+    role.appendChild(list);
+  }
+  const perceptions = roleLog.perceptions || [];
+  if (perceptions.length) {
+    role.appendChild(element("div", "subhead", "自身感知（" + perceptions.length + " 条）"));
+    const list = element("ul");
+    for (const text of perceptions.slice(0, 5)) listItem(list, "感知：" + text, "muted");
+    role.appendChild(list);
+    if (perceptions.length > 5) {
+      const more = element("details", "more");
+      more.appendChild(element("summary", null,
+        "展开其余 " + (perceptions.length - 5) + " 条感知（完整保留）"));
+      const rest = element("ul");
+      for (const text of perceptions.slice(5)) listItem(rest, "感知：" + text, "muted");
+      more.appendChild(rest);
+      role.appendChild(more);
+    }
+  }
+  if (!states.length && !perceptions.length) {
+    role.appendChild(element("p", "muted", "本轮无自身行动状态与感知"));
+  }
+  return role;
 }
 
 function postCommand(path) {
@@ -229,6 +385,8 @@ function applySnapshot(data) {
   renderCycles(data.cycles || []);
   renderCalls(data.calls || []);
   renderFinal(data.final || null);
+  auditData = data.audit || null;
+  renderAudit(auditData);
   renderCompleted(collectCompleted(data.cycles || []));
   applyView();
 }
@@ -255,9 +413,14 @@ function renderHeader(data) {
 
 function renderCycles(cycles) {
   const host = document.getElementById("cycles");
-  const openSteps = {};
-  for (const node of host.querySelectorAll("details.cycle[open]")) {
-    openSteps[node.dataset.step] = true;  // 新增日志不收起已展开的周期
+  const remembered = new Map();
+  for (const node of host.querySelectorAll("details.cycle")) {
+    remembered.set(node.dataset.step, {
+      open: node.open,
+      nested: Array.from(node.querySelectorAll("details"), function (child) {
+        return child.open;
+      }),
+    });
   }
   host.replaceChildren();
   if (!cycles.length) {
@@ -266,8 +429,15 @@ function renderCycles(cycles) {
     return;
   }
   cycles.forEach(function (data, index) {
-    const node = cycleNode(data, index === cycles.length - 1 || openSteps[String(data.step)]);
+    const previous = remembered.get(String(data.step));
+    const node = cycleNode(data, previous ? previous.open : index === cycles.length - 1);
     node.dataset.step = String(data.step);
+    // 已完成周期内容固定；审计或新周期更新时，保留用户的展开/收起选择。
+    if (previous) {
+      Array.from(node.querySelectorAll("details")).forEach(function (child, childIndex) {
+        if (childIndex < previous.nested.length) child.open = previous.nested[childIndex];
+      });
+    }
     host.appendChild(node);
   });
 }
@@ -278,52 +448,72 @@ function cycleNode(data, open) {
   const diagnostics = logs.diagnostics || {};
   const details = element("details", "cycle");
   details.open = !!open;
-  const summary = element("summary");
-  const cycleId = diagnostics.cycle_id ? " · " + diagnostics.cycle_id : "";
-  summary.textContent = "周期 " + data.step + cycleId + " · 剧情时刻 " + displayMs(world.simulation_time_ms);
-  details.appendChild(summary);
 
   const events = world.events || [];
-  details.appendChild(listBlock("同刻事件",
+  const entityActions = data.entity_actions || {};
+  const roleKeys = Object.keys(entityActions);
+  const registry = world.registry_actions || [];
+  const outcomes = world.action_outcomes || [];
+  const outcomeCounts = {};
+  for (const outcome of outcomes) {
+    const code = String((outcome && outcome.result) || "");
+    outcomeCounts[code] = (outcomeCounts[code] || 0) + 1;
+  }
+
+  const summary = element("summary");
+  summary.appendChild(element("span", "cycle-index", "周期 " + data.step));
+  summary.appendChild(element("span", "cycle-meta",
+    "剧情时刻 " + displayMs(world.simulation_time_ms) +
+    (diagnostics.cycle_id ? " · " + diagnostics.cycle_id : "")));
+  const chips = element("span", "chips");
+  chips.appendChild(element("span", "chip", "事件 " + events.length));
+  chips.appendChild(element("span", "chip", "角色 " + roleKeys.length));
+  chips.appendChild(element("span", "chip", "登记 " + registry.length));
+  for (const code of Object.keys(outcomeCounts)) {
+    chips.appendChild(countChip(code, outcomeCounts[code]));
+  }
+  summary.appendChild(chips);
+  details.appendChild(summary);
+
+  const body = element("div", "cycle-body");
+  body.appendChild(listBlock("同刻事件",
     events.map(function (event) {
       return "[" + event.kind + "] " + event.event_id + "：" + event.description;
     }),
     "本轮无同刻事件。"));
 
-  const entityActions = data.entity_actions || {};
-  const roleKeys = Object.keys(entityActions);
-  for (const key of roleKeys) {
-    const roleLog = logs[key] || {};
-    const role = element("div", "role");
-    role.appendChild(element("h3", null, "角色 " + (roleLog.role_id || key)));
-    role.appendChild(element("p", null, "主动声明：" + entityActions[key]));
+  if (roleKeys.length) {
+    body.appendChild(element("h4", null, "角色主动声明与自身感知"));
+    const roles = element("div", "roles");
+    for (const key of roleKeys) {
+      roles.appendChild(roleCard(logs[key] || {}, key, entityActions[key]));
+    }
+    body.appendChild(roles);
+  } else {
+    body.appendChild(element("p", "empty", "本周期没有角色声明记录。"));
+  }
+
+  if (registry.length) {
+    const block = element("details", "tech registry");
+    block.appendChild(element("summary", null,
+      "统一登记后的行动记录（" + registry.length + " 条）"));
     const list = element("ul");
-    const states = roleLog.action_states || [];
-    for (const state of states) {
-      listItem(list, "[" + state.phase + "] " + state.action_id + " — " + state.detail);
+    for (const record of registry) {
+      const item = element("li");
+      item.appendChild(phaseChip(record.phase));
+      item.appendChild(element("span", null,
+        " " + record.action_id + "（" + record.role_id + "，" +
+        record.start_ms + "→" + record.expected_end_ms + "ms）" + record.description));
+      list.appendChild(item);
     }
-    const perceptions = roleLog.perceptions || [];
-    for (const text of perceptions.slice(0, 5)) listItem(list, "感知：" + text, "muted");
-    if (!states.length && !perceptions.length) {
-      listItem(list, "本轮无自身行动状态与感知", "muted");
-    }
-    role.appendChild(list);
-    details.appendChild(role);
-  }
-  if (!roleKeys.length) {
-    details.appendChild(element("p", "empty", "本周期没有角色声明记录。"));
+    block.appendChild(list);
+    body.appendChild(block);
+  } else {
+    body.appendChild(listBlock("统一登记后的行动记录", [], "暂无登记行动"));
   }
 
-  const registry = world.registry_actions || [];
-  details.appendChild(listBlock("统一登记后的行动记录",
-    registry.map(function (record) {
-      return "[" + record.phase + "] " + record.action_id + "（" + record.role_id + "，" +
-        record.start_ms + "→" + record.expected_end_ms + "ms）" + record.description;
-    }),
-    "暂无登记行动"));
-
-  const diagnostic = world.world_diagnostic;
   const diagnosticTexts = [];
+  const diagnostic = world.world_diagnostic;
   if (diagnostic) {
     for (const state of diagnostic.action_states || []) {
       diagnosticTexts.push("[实际 " + state.state + "] " + state.action_id +
@@ -333,25 +523,50 @@ function cycleNode(data, open) {
       diagnosticTexts.push("[被动] " + passive);
     }
   }
-  const diagnosticBlock = listBlock("World 实际行动与被动过程（客观诊断）",
-    diagnosticTexts, "暂无实际行动与被动过程");
-  diagnosticBlock.className = "worlddiag";
-  details.appendChild(diagnosticBlock);
-
-  const factTexts = [];
-  for (const fact of world.committed_facts || []) factTexts.push(fact);
-  for (const outcome of world.action_outcomes || []) {
-    factTexts.push("结算：" + outcome.action_id + " → " + outcome.result +
-      "（" + outcome.detail + "）");
+  if (diagnosticTexts.length) {
+    const block = element("details", "tech worlddiag");
+    block.appendChild(element("summary", null,
+      "World 实际行动与被动过程（" + diagnosticTexts.length + " 条）"));
+    const list = element("ul");
+    for (const text of diagnosticTexts) listItem(list, text);
+    block.appendChild(list);
+    body.appendChild(block);
+  } else {
+    body.appendChild(listBlock("World 实际行动与被动过程（客观诊断）", [],
+      "暂无实际行动与被动过程"));
   }
-  const factBlock = listBlock("事实增量与结算结果", factTexts, "暂无事实增量与结算结果");
-  factBlock.className = "facts";
-  details.appendChild(factBlock);
+
+  const facts = element("div", "facts");
+  facts.appendChild(element("h4", null, "事实增量与结算结果"));
+  const factList = element("ul");
+  for (const fact of world.committed_facts || []) listItem(factList, fact);
+  for (const outcome of outcomes) {
+    const item = element("li");
+    item.appendChild(resultChip(outcome.result));
+    item.appendChild(element("span", null, " " + outcome.action_id + "：" + outcome.detail));
+    factList.appendChild(item);
+  }
+  if (!(world.committed_facts || []).length && !outcomes.length) {
+    listItem(factList, "暂无事实增量与结算结果", "muted");
+  }
+  facts.appendChild(factList);
+  body.appendChild(facts);
 
   const changes = diagnostics.change_reasons || {};
-  details.appendChild(listBlock("诊断：行动变化原因",
-    Object.keys(changes).map(function (key) { return key + "：" + changes[key]; }),
-    "本周期无行动变化诊断"));
+  const changeKeys = Object.keys(changes);
+  if (changeKeys.length) {
+    const block = element("details", "tech");
+    block.appendChild(element("summary", null,
+      "诊断：行动变化原因（" + changeKeys.length + " 条）"));
+    const list = element("ul");
+    for (const key of changeKeys) listItem(list, key + "：" + changes[key]);
+    block.appendChild(list);
+    body.appendChild(block);
+  } else {
+    body.appendChild(listBlock("诊断：行动变化原因", [], "本周期无行动变化诊断"));
+  }
+
+  details.appendChild(body);
   return details;
 }
 
@@ -491,6 +706,107 @@ function renderFinal(finalData) {
   host.appendChild(list);
 }
 
+function auditStatusText(audit) {
+  if (!audit || audit.enabled !== true) {
+    return "未开启审计（启动时未提供 --audit-config）。";
+  }
+  const status = audit.status || "waiting";
+  if (status === "waiting") return "等待模拟结束…";
+  if (status === "checking") return "模拟已结束，正在构建证据报告并执行机械检查…";
+  if (status === "running") return "审计模型运行中…";
+  if (status === "done") {
+    return "审计完成（模型 " + (audit.models || []).length + " 个，失败 " +
+      (audit.failed_models || 0) + " 个）。";
+  }
+  if (status === "cancelled") {
+    return "审计被取消（部分模型可能已执行）；模拟概要/世界事实未受影响，不代表审计通过。";
+  }
+  if (status === "failed") return "审计内部失败：" + (audit.error || audit.scope || "（无说明）");
+  return status;
+}
+
+function auditCompactStatus(audit) {
+  if (!audit || audit.enabled !== true) return "未开启";
+  const status = audit.status || "waiting";
+  if (status === "waiting") return "等待模拟结束";
+  if (status === "checking") return "机械检查中";
+  if (status === "running") return "模型运行中";
+  if (status === "done") return "完成（失败模型 " + (audit.failed_models || 0) + " 个）";
+  if (status === "cancelled") return "已取消（部分模型可能已执行）";
+  if (status === "failed") return "内部失败";
+  return status;
+}
+
+function renderAudit(audit) {
+  const host = document.getElementById("audit");
+  const summary = document.querySelector("#audit-section > summary");
+  if (summary) {
+    summary.textContent = "运行后审计：" + auditCompactStatus(audit) +
+      "（独立于视图筛选，不代表成功动作）";
+  }
+  host.replaceChildren();
+  host.appendChild(element("p", "muted", auditStatusText(audit)));
+  if (!audit || audit.enabled !== true) return;
+  if (audit.scope) host.appendChild(element("p", "muted", audit.scope));
+  if (audit.error) host.appendChild(element("p", "muted", "错误：" + audit.error));
+  if (typeof audit.evidence_count === "number" && audit.evidence_count > 0) {
+    host.appendChild(element("p", "muted", "证据条数：" + audit.evidence_count));
+  }
+  const checks = audit.checks || [];
+  if (checks.length) {
+    host.appendChild(element("h4", null, "机械检查（确定性）"));
+    const list = element("ul");
+    for (const check of checks) {
+      listItem(list, "[" + check.status + "] " + check.check_id + "：" + check.detail);
+    }
+    host.appendChild(list);
+  }
+  for (const model of audit.models || []) {
+    const block = element("div", "audit-model" + (model.status === "failed" ? " error" : ""));
+    block.appendChild(element("div", "call-head",
+      "模型 " + model.id + "（" + model.model + "）— " + model.status));
+    if (model.error) block.appendChild(element("div", "call-summary", "错误：" + model.error));
+    if (model.summary) block.appendChild(element("div", "call-summary", "总结：" + model.summary));
+    for (const finding of model.findings || []) {
+      const refs = (finding.evidence_refs || []).join("、");
+      const list = element("ul");
+      listItem(list, "[" + finding.severity + "/" + finding.certainty + "] " +
+        finding.title + "：" + finding.explanation +
+        (refs ? "（证据：" + refs + "）" : "") + " 建议：" + finding.suggestion);
+      block.appendChild(list);
+    }
+    host.appendChild(block);
+  }
+}
+
+function auditMarkdownLines(audit) {
+  const lines = ["", "## 运行后审计", ""];
+  if (!audit || audit.enabled !== true) {
+    lines.push("- 未开启审计。");
+    return lines;
+  }
+  lines.push(markdownLines(auditStatusText(audit), "- "));
+  if (audit.scope) lines.push(markdownLines(audit.scope, "- "));
+  if (audit.error) lines.push(markdownLines("错误：" + audit.error, "- "));
+  for (const check of audit.checks || []) {
+    lines.push(markdownLines(
+      "[" + check.status + "] " + check.check_id + "：" + check.detail, "- "));
+  }
+  for (const model of audit.models || []) {
+    lines.push("", "### " + markdownText(
+      "模型 " + model.id + "（" + model.model + "）— " + model.status));
+    if (model.error) lines.push(markdownLines("错误：" + model.error, "- "));
+    if (model.summary) lines.push(markdownLines("总结：" + model.summary, "- "));
+    for (const finding of model.findings || []) {
+      const refs = (finding.evidence_refs || []).join("、");
+      lines.push(markdownLines("[" + finding.severity + "/" + finding.certainty + "] " +
+        finding.title + "：" + finding.explanation +
+        (refs ? "（证据：" + refs + "）" : "") + " 建议：" + finding.suggestion, "- "));
+    }
+  }
+  return lines;
+}
+
 function collectCompleted(cycles) {
   const rows = [];
   const steps = new Set();
@@ -516,10 +832,11 @@ function collectCompleted(cycles) {
 function renderCompleted(result) {
   const host = document.getElementById("completed");
   const count = document.getElementById("completed-count");
+  const openRows = new Set(Array.from(host.querySelectorAll(".settlement-meta[open]"),
+    function (node) { return node.dataset.rowKey; }));
   host.replaceChildren();
   count.textContent = result.rows.length
-    ? "已确认完成结果 " + result.rows.length + " 条，涉及 " + result.cycleCount +
-      " 个周期（顶部周期总数与真实剧情时刻不因筛选改变）。"
+    ? "已确认完成结果 " + result.rows.length + " 条，涉及 " + result.cycleCount + " 个周期。"
     : "已确认完成结果 0 条。";
   if (!result.rows.length) {
     host.appendChild(element("p", "empty",
@@ -527,17 +844,27 @@ function renderCompleted(result) {
       "候选模型输出、检查通过与普通调用都不会计入。"));
     return;
   }
+  const transcript = element("div", "transcript");
   for (const row of result.rows) {
-    const block = element("div", "completed-row");
-    block.appendChild(element("div", "call-head",
-      "周期 " + row.step + (row.cycleId ? " · " + row.cycleId : "") +
-      " · 剧情时刻 " + displayMs(row.timeMs)));
+    const line = element("div", "transcript-line");
+    const detail = row.detail === undefined || row.detail === null ||
+      String(row.detail).trim() === "" ? "（World 已确认完成，无结算说明）" : String(row.detail);
+    line.appendChild(element("p", "transcript-text",
+      "[" + transcriptTime(row.timeMs) + "] " + detail));
+    const meta = element("details", "settlement-meta");
+    meta.dataset.rowKey = JSON.stringify([row.step, row.actionId, row.timeMs]);
+    meta.open = openRows.has(meta.dataset.rowKey);
+    meta.appendChild(element("summary", null, "查看结算详情"));
     const list = element("ul");
-    listItem(list, row.actionId + "：" +
-      (row.detail === undefined || row.detail === null ? "（无说明）" : String(row.detail)));
-    block.appendChild(list);
-    host.appendChild(block);
+    listItem(list, "结果：completed");
+    listItem(list, "行动身份：" + (row.actionId || "—"));
+    listItem(list, "剧情时刻：" + displayMs(row.timeMs));
+    listItem(list, "周期：" + row.step + (row.cycleId ? "（" + row.cycleId + "）" : ""));
+    meta.appendChild(list);
+    line.appendChild(meta);
+    transcript.appendChild(line);
   }
+  host.appendChild(transcript);
 }
 
 function applyView() {
@@ -546,8 +873,14 @@ function applyView() {
   document.getElementById("calls-section").style.display = completed ? "none" : "";
   document.getElementById("completed-section").style.display = completed ? "" : "none";
   document.getElementById("view-note").textContent = completed
-    ? "只看 World 已提交的 result=completed 结算；最终收尾状态独立保留，与筛选无关。"
-    : "完整调试视图；最终收尾状态始终独立显示。";
+    ? "成功动作转录：只显示 World 已提交的 result=completed 结算；最终状态与审计折叠保留，与筛选无关。"
+    : "完整调试视图；最终收尾状态与审计始终独立显示。";
+  if (lastAppliedView !== viewMode) {
+    // 只在切换模式时调整折叠默认；轮询不重新收起/展开，也不影响审计更新。
+    document.getElementById("final-section").open = !completed;
+    document.getElementById("audit-section").open = !completed;
+    lastAppliedView = viewMode;
+  }
 }
 
 function markdownText(value) {
@@ -614,23 +947,23 @@ function buildCompletedMarkdown() {
     "",
     "共 " + result.rows.length + " 条完成结果，涉及 " + result.cycleCount + " 个周期。",
     "",
-    "## 完成行动",
+    "## 成功动作转录",
     "",
   ];
   if (!result.rows.length) {
     lines.push("暂无 World 已确认完成的行动。");
   }
   for (const row of result.rows) {
-    lines.push(markdownLines(
-      "周期 " + row.step + (row.cycleId ? "（" + row.cycleId + "）" : "") +
-      " · " + displayMs(row.timeMs) + " · " + row.actionId + "：" +
-      (row.detail === undefined || row.detail === null ? "（无说明）" : row.detail),
-      "- "));
+    const detail = row.detail === undefined || row.detail === null ||
+      String(row.detail).trim() === "" ? "（World 已确认完成，无结算说明）" : row.detail;
+    const body = markdownLines(detail, "");
+    lines.push("- [" + transcriptTime(row.timeMs) + "] " + body);
   }
   lines.push("", "## 最终状态", "");
   for (const line of finalStateMarkdown((lastSnapshot || {}).final)) {
     lines.push(markdownLines(line, "- "));
   }
+  for (const line of auditMarkdownLines((lastSnapshot || {}).audit)) lines.push(line);
   return lines.join(NL) + NL;
 }
 
@@ -729,6 +1062,7 @@ function buildProcessMarkdown() {
   for (const line of finalStateMarkdown(snapshot.final)) {
     lines.push(markdownLines(line, "- "));
   }
+  for (const line of auditMarkdownLines(snapshot.audit)) lines.push(line);
   return lines.join(NL) + NL;
 }
 
@@ -766,6 +1100,11 @@ document.getElementById("filter-role").addEventListener("change", applyCallFilte
 document.getElementById("filter-phase").addEventListener("change", applyCallFilters);
 
 const source = new EventSource("/events");
+function auditPending() {
+  return !!(auditData && auditData.enabled === true &&
+    ["waiting", "checking", "running"].indexOf(auditData.status) >= 0);
+}
+
 source.onmessage = function (event) {
   let data = null;
   try { data = JSON.parse(event.data); } catch (error) { return; }
@@ -780,7 +1119,9 @@ source.onerror = function () {};
 
 refreshStatus();
 refreshSnapshot();
-window.setInterval(function () { if (!finished) refreshSnapshot(); }, 1500);
+window.setInterval(function () {
+  if (!finished || auditPending()) refreshSnapshot();
+}, 1500);
 window.setInterval(function () { if (!finished) refreshStatus(); }, 1500);
 </script>
 </body>

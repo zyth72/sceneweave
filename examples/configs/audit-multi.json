@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "id": "deepseek-flash",
+      "factory": "sceneweave.integrations.concordia.chat_completions:create_model",
+      "options": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "timeout_seconds": 120,
+        "max_tokens": 16000,
+        "extra_body": {
+          "thinking": {"type": "enabled"},
+          "reasoning_effort": "low",
+          "response_format": {"type": "json_object"}
+        }
+      }
+    },
+    {
+      "id": "second-provider",
+      "factory": "sceneweave.integrations.concordia.chat_completions:create_model",
+      "options": {
+        "base_url": "https://api.example.invalid/v1",
+        "model": "replace-with-real-model",
+        "api_key_env": "AUDIT_SECOND_API_KEY",
+        "timeout_seconds": 120,
+        "max_tokens": 8000
+      }
+    }
+  ]
+}

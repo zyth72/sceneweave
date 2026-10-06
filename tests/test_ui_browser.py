@@ -439,6 +439,7 @@ const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
     completedHidden: document.getElementById('completed-section').style.display === 'none',
     callsVisible: document.getElementById('calls-section').style.display !== 'none',
     exportEnabled: !document.getElementById('btn-export').disabled,
+    auditDisabled: document.getElementById('audit').textContent.indexOf('未开启审计') >= 0,
   }));
 
   await page.selectOption('#view-mode', 'completed');
@@ -474,13 +475,28 @@ const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
   );
   const afterFull = await page.evaluate(() => {
     const text = document.getElementById('completed').textContent;
+    const transcript = Array.prototype.map.call(
+      document.querySelectorAll('#completed .transcript-text'),
+      (node) => node.textContent).join('\n');
+    const meta = document.querySelector('#completed .settlement-meta');
     return {
       mode: document.getElementById('view-mode').value,
-      rows: document.querySelectorAll('.completed-row').length,
+      rows: document.querySelectorAll('#completed .transcript-line').length,
       completedVisible: document.getElementById('completed-section').style.display !== 'none',
       cyclesHidden: document.getElementById('cycles-section').style.display === 'none',
       callsHidden: document.getElementById('calls-section').style.display === 'none',
-      hasCompleted: text.indexOf('a-1') >= 0 && text.indexOf('行动甲完成') >= 0,
+      transcript: transcript,
+      hasCompleted: transcript.indexOf('行动甲完成') >= 0,
+      hasIdentityNoise: /a-1|a-4|a-5|cycle-/.test(transcript),
+      hasStatusNoise: transcript.indexOf('completed') >= 0,
+      time1ms: transcript.indexOf('[00:00.001]') >= 0,
+      time1800: transcript.indexOf('[00:09.6]') >= 0,
+      timeLong: transcript.indexOf('[02:05]') >= 0,
+      metaClosedByDefault: meta.open === false,
+      metaHasIdentity: meta.textContent.indexOf('a-1') >= 0 &&
+        meta.textContent.indexOf('cycle-1') >= 0,
+      finalCollapsed: document.getElementById('final-section').open === false,
+      auditCollapsed: document.getElementById('audit-section').open === false,
       hasFailed: text.indexOf('a-2') >= 0,
       hasUnconfirmed: text.indexOf('a-3') >= 0,
       hasCandidate: text.indexOf('a-candidate') >= 0,
@@ -491,6 +507,12 @@ const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
       exportEnabled: !document.getElementById('btn-export').disabled,
       xssExecuted: typeof window.__xss !== 'undefined',
       injectedNodes: document.querySelectorAll('#completed img, #completed script').length,
+      auditDone: document.getElementById('audit').textContent.indexOf('审计完成') >= 0,
+      auditFinding: document.getElementById('audit').textContent.indexOf('通信证据不足') >= 0,
+      auditEvidence: document.getElementById('audit').textContent.indexOf('E-0001') >= 0,
+      auditFailed: document.getElementById('audit').textContent.indexOf('输出未通过校验') >= 0,
+      auditInjected: document.querySelectorAll('#audit img, #audit script').length,
+      auditSummary: document.querySelector('#audit-section > summary').textContent,
     };
   });
 
@@ -499,20 +521,31 @@ const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
     page.click('#btn-export'),
   ]);
   const completedMd = fs.readFileSync(await completedDownload.path(), 'utf8');
+  const transcriptStart = completedMd.indexOf('## 成功动作转录');
+  const transcriptEnd = completedMd.indexOf('## 最终状态');
+  const transcriptBody = transcriptStart >= 0 && transcriptEnd > transcriptStart
+    ? completedMd.slice(transcriptStart, transcriptEnd) : '';
   const completedExport = {
     filename: completedDownload.suggestedFilename(),
-    hasCompleted: completedMd.indexOf('a-1') >= 0 && completedMd.indexOf('行动甲完成') >= 0,
-    hasMultiline: completedMd.indexOf('\n  第二行说明') >= 0,
-    safeHtml: completedMd.indexOf('<img') < 0 && completedMd.indexOf('&lt;img') >= 0,
-    safeHeading: completedMd.includes(String.raw`\#\# 假标题`),
-    safeLink: completedMd.includes(String.raw`\[伪链接\]\(javascript:alert\(1\)\)`),
+    hasCompleted: transcriptBody.indexOf('行动甲完成') >= 0,
+    hasMultiline: transcriptBody.indexOf('\n  第二行说明') >= 0,
+    safeHtml: transcriptBody.indexOf('<img') < 0 && transcriptBody.indexOf('&lt;img') >= 0,
+    safeHeading: transcriptBody.includes(String.raw`\#\# 假标题`),
+    safeLink: transcriptBody.includes(String.raw`\[伪链接\]\(javascript:alert\(1\)\)`),
+    time1ms: transcriptBody.indexOf('[00:00.001]') >= 0,
+    time1800: transcriptBody.indexOf('[00:09.6]') >= 0,
+    timeLong: transcriptBody.indexOf('[02:05]') >= 0,
+    noIdentityInBody: transcriptBody.indexOf('a-1') < 0 &&
+      transcriptBody.indexOf('a-4') < 0 && transcriptBody.indexOf('cycle-') < 0,
     noFailed: completedMd.indexOf('a-2') < 0,
     noUnconfirmed: completedMd.indexOf('a-3') < 0,
     noCandidate: completedMd.indexOf('a-candidate') < 0,
-    hasCount: completedMd.indexOf('1 条完成结果，涉及 1 个周期') >= 0,
+    hasCount: completedMd.indexOf('3 条完成结果，涉及 3 个周期') >= 0,
     hasFinal: completedMd.indexOf(String.raw`停止原因：time\_limit`) >= 0 &&
       completedMd.indexOf('8000 ms') >= 0,
     hasDisclaimer: completedMd.indexOf('不等于全局目标必然达成') >= 0,
+    hasAudit: completedMd.indexOf('## 运行后审计') >= 0 &&
+      completedMd.indexOf('通信证据不足') >= 0 && completedMd.indexOf('E-0001') >= 0,
   };
 
   await page.selectOption('#view-mode', 'all');
@@ -522,6 +555,8 @@ const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
     cyclesVisible: document.getElementById('cycles-section').style.display !== 'none',
     callsVisible: document.getElementById('calls-section').style.display !== 'none',
     calls: document.querySelectorAll('.call').length,
+    finalOpen: document.getElementById('final-section').open === true,
+    auditOpen: document.getElementById('audit-section').open === true,
   }));
   const [allDownload] = await Promise.all([
     page.waitForEvent('download'),
@@ -537,6 +572,8 @@ const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
     noRawPrompt: allMd.indexOf('SECRET_PROMPT_LIN') < 0 &&
       allMd.indexOf('SECRET_PROMPT_WORLD') < 0,
     hasCallsSection: allMd.indexOf('## 模型调用摘要') >= 0,
+    hasAudit: allMd.indexOf('## 运行后审计') >= 0 &&
+      allMd.indexOf('输出未通过校验') >= 0,
   };
 
   await page.selectOption('#filter-role', '');
@@ -548,13 +585,32 @@ const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
   const modePersisted = await page.evaluate(() => ({
     mode: document.getElementById('view-mode').value,
     callsHidden: document.getElementById('calls-section').style.display === 'none',
-    rows: document.querySelectorAll('.completed-row').length,
+    rows: document.querySelectorAll('#completed .transcript-line').length,
+    finalCollapsed: document.getElementById('final-section').open === false,
+    auditCollapsed: document.getElementById('audit-section').open === false,
+  }));
+  await page.evaluate(() => {
+    const cycles = document.querySelectorAll('#cycles > details');
+    cycles[cycles.length - 1].open = false;
+    cycles[0].querySelector('details.tech').open = true;
+    document.querySelector('#completed .settlement-meta').open = true;
+  });
+  current = payloads.later;
+  await page.evaluate(() => { window.refreshSnapshot(); });
+  await page.waitForTimeout(200);
+  const auditUpdated = await page.evaluate(() => ({
+    summary: document.getElementById('audit').textContent.indexOf('更新后的审计总结') >= 0,
+    mode: document.getElementById('view-mode').value,
+    auditCollapsed: document.getElementById('audit-section').open === false,
+    latestCycleClosed: !document.querySelector('#cycles > details:last-child').open,
+    technicalDetailsOpen: document.querySelector('#cycles > details details.tech').open,
+    settlementDetailsOpen: document.querySelector('#completed .settlement-meta').open,
   }));
 
   await browser.close();
   console.log('RESULT ' + JSON.stringify({
     initial, emptyState, emptyExport, afterFull, completedExport,
-    allView, allExport, allCallsAfterClear, modePersisted, pageErrors,
+    allView, allExport, allCallsAfterClear, modePersisted, auditUpdated, pageErrors,
   }));
 })().catch((error) => {
   console.error('BROWSER_FAILED ' + (error && error.stack ? error.stack : error));
@@ -612,7 +668,7 @@ def _view_payloads() -> dict[str, Any]:
             _view_cycle(
                 1,
                 "cycle-1",
-                500,
+                1,
                 [
                     {
                         "action_id": "a-1",
@@ -628,8 +684,26 @@ def _view_payloads() -> dict[str, Any]:
             _view_cycle(
                 2,
                 "cycle-2",
-                2500,
+                1800,
                 [{"action_id": "a-3", "result": "unconfirmed", "detail": "行动丙未确认"}],
+            ),
+            _view_cycle(
+                3,
+                "cycle-3",
+                9600,
+                [
+                    {
+                        "action_id": "a-5",
+                        "result": "completed",
+                        "detail": "沈言于9600ms完成向上级报告",
+                    }
+                ],
+            ),
+            _view_cycle(
+                4,
+                "cycle-4",
+                125000,
+                [{"action_id": "a-4", "result": "completed", "detail": "长分钟行动完成"}],
             ),
         ],
         "final": _final(),
@@ -663,7 +737,54 @@ def _view_payloads() -> dict[str, Any]:
             ),
         ],
     }
-    return {"empty": empty, "full": full}
+    full["audit"] = {
+        "enabled": True,
+        "status": "done",
+        "revision": 3,
+        "scope": "运行结束（time_limit）：覆盖全部 2 个已完成周期，不做成功筛选。",
+        "evidence_count": 5,
+        "checks": [
+            {
+                "check_id": "commit-version-monotonic",
+                "status": "passed",
+                "detail": "提交版本严格递增且与概要一致",
+                "evidence_refs": [],
+            }
+        ],
+        "models": [
+            {
+                "id": "deepseek-flash",
+                "model": "deepseek-flash",
+                "status": "ok",
+                "summary": "总体稳定",
+                "error": None,
+                "findings": [
+                    {
+                        "severity": "suspicion",
+                        "certainty": "uncertain",
+                        "title": "通信证据不足",
+                        "explanation": "只作为疑点 <img src=x onerror=window.__xss=8>",
+                        "evidence_refs": ["E-0001"],
+                        "suggestion": "补充通信日志",
+                    }
+                ],
+            },
+            {
+                "id": "second",
+                "model": "m2",
+                "status": "failed",
+                "summary": None,
+                "error": "输出未通过校验：audit 输出不是合法 JSON",
+                "findings": [],
+            },
+        ],
+        "failed_models": 1,
+    }
+    later = json.loads(json.dumps(full, ensure_ascii=False))
+    later["version"] = [2, 3, 1, 4]
+    later["audit"]["revision"] = 4
+    later["audit"]["models"][0]["summary"] = "更新后的审计总结"
+    return {"empty": empty, "full": full, "later": later}
 
 
 @pytest.mark.skipif(
@@ -713,6 +834,7 @@ def test_page_completed_view_and_markdown_export_in_real_browser(tmp_path: Path)
             "completedHidden": True,
             "callsVisible": True,
             "exportEnabled": True,
+            "auditDisabled": True,
         }
         empty = outcome["emptyState"]
         assert empty["rows"] == 0
@@ -726,32 +848,49 @@ def test_page_completed_view_and_markdown_export_in_real_browser(tmp_path: Path)
         assert empty_export["hasDisclaimer"]
         full = outcome["afterFull"]
         assert full["mode"] == "completed", "新快照到达后保持所选模式"
-        assert full["rows"] == 1
+        assert full["rows"] == 3
         assert full["completedVisible"] and full["cyclesHidden"] and full["callsHidden"]
-        assert full["hasCompleted"], "只显示 completed 结算"
+        assert full["hasCompleted"], "成功转录只显示 completed 结算"
+        assert not full["hasIdentityNoise"], "默认正文不出现行动/周期身份"
+        assert not full["hasStatusNoise"], "默认正文不出现状态码"
+        assert full["time1ms"] and full["time1800"] and full["timeLong"], "毫秒与长分钟精度"
+        assert full["metaClosedByDefault"], "结算详情默认折叠"
+        assert full["metaHasIdentity"], "展开详情仍能检索身份"
+        assert full["finalCollapsed"] and full["auditCollapsed"], "成功转录模式折叠最终与审计"
         assert not full["hasFailed"] and not full["hasUnconfirmed"]
         assert not full["hasCandidate"], "模型候选里的 completed 不计入成功"
-        assert "1 条" in full["countText"] and "1 个周期" in full["countText"]
-        assert "已完成 2 个周期" in full["timeText"]
+        assert "3 条" in full["countText"] and "3 个周期" in full["countText"]
+        assert "已完成 4 个周期" in full["timeText"]
         assert full["finalVisible"], "最终收尾状态独立保留"
         assert full["playDisabled"] and full["exportEnabled"]
         assert full["xssExecuted"] is False and full["injectedNodes"] == 0
+        assert full["auditDone"] and full["auditFinding"] and full["auditEvidence"]
+        assert full["auditFailed"]
+        assert full["auditInjected"] == 0, "审计文本不得注入节点"
+        assert "失败模型 1 个" in full["auditSummary"], "折叠摘要仍显示失败模型数"
+        assert "不代表成功动作" in full["auditSummary"]
         completed_export = outcome["completedExport"]
         assert completed_export["filename"] == "sceneweave-completed.md"
         assert completed_export["hasCompleted"]
         assert completed_export["hasMultiline"], "多行说明保留且不破坏结构"
         assert completed_export["safeHtml"], "导出将 HTML 当作文字"
         assert completed_export["safeHeading"] and completed_export["safeLink"]
+        assert completed_export["time1ms"] and completed_export["time1800"]
+        assert completed_export["timeLong"], "长分钟转录保留"
+        assert completed_export["noIdentityInBody"], "转录正文不插入身份/周期码"
         assert completed_export["noFailed"] and completed_export["noUnconfirmed"]
         assert completed_export["noCandidate"]
         assert completed_export["hasCount"] and completed_export["hasFinal"]
         assert completed_export["hasDisclaimer"]
+        assert completed_export["hasAudit"], "完成模式导出附独立审计章节"
         all_view = outcome["allView"]
         assert all_view == {
             "mode": "all",
             "cyclesVisible": True,
             "callsVisible": True,
             "calls": 1,
+            "finalOpen": True,
+            "auditOpen": True,
         }
         all_export = outcome["allExport"]
         assert all_export["filename"] == "sceneweave-process.md"
@@ -759,12 +898,23 @@ def test_page_completed_view_and_markdown_export_in_real_browser(tmp_path: Path)
         assert all_export["hasLinSummary"] and all_export["filteredShen"]
         assert all_export["noRawPrompt"], "导出省略原始 Prompt/Response"
         assert all_export["hasCallsSection"]
+        assert all_export["hasAudit"], "全部模式导出附审计章节"
         assert outcome["allCallsAfterClear"] == 3, "清除筛选后恢复全部调用"
         assert outcome["modePersisted"] == {
             "mode": "completed",
             "callsHidden": True,
-            "rows": 1,
-        }, "再次刷新快照后模式稳定"
+            "rows": 3,
+            "finalCollapsed": True,
+            "auditCollapsed": True,
+        }, "再次刷新快照后模式稳定且最终/审计保持折叠"
+        assert outcome["auditUpdated"] == {
+            "summary": True,
+            "mode": "completed",
+            "auditCollapsed": True,
+            "latestCycleClosed": True,
+            "technicalDetailsOpen": True,
+            "settlementDetailsOpen": True,
+        }, "审计更新保留用户对周期、技术详情和结算详情的展开选择"
     finally:
         server.shutdown()
         server.server_close()

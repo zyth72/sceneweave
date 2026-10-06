@@ -182,8 +182,10 @@ def test_build_snapshot_resolves_refs_and_records_skip_and_error() -> None:
         },
     )
     payload = build_snapshot(history, log)
-    assert set(payload) == {"version", "finished", "cycles", "final", "calls"}
-    assert payload["version"] == [history.revision, 3, 0]
+    assert set(payload) == {"version", "finished", "cycles", "final", "calls", "audit"}
+    assert payload["version"] == [history.revision, 3, 0, 0]
+    assert payload["audit"]["enabled"] is False
+    assert payload["audit"]["status"] == "disabled"
     assert payload["finished"] is False
     assert payload["cycles"] == [{"step": 1, "entity_logs": {"world": {"simulation_time_ms": 0}}}]
     assert payload["final"] is None
@@ -326,11 +328,22 @@ def test_snapshot_server_fixed_readonly_endpoint_and_capture() -> None:
         base = f"http://127.0.0.1:{address[1]}"
         initial = _http_get(base + "/run-snapshot")
         assert initial == {
-            "version": [0, 0, 0],
+            "version": [0, 0, 0, 0],
             "finished": False,
             "cycles": [],
             "final": None,
             "calls": [],
+            "audit": {
+                "enabled": False,
+                "status": "disabled",
+                "revision": 0,
+                "scope": "",
+                "error": None,
+                "evidence_count": 0,
+                "checks": [],
+                "models": [],
+                "failed_models": 0,
+            },
         }
         # 固定路径：查询串、其它文件路径与 POST 都不是端点。
         for path in ("/run-snapshot?path=/etc/passwd", "/etc/passwd", "/status?x=1"):
@@ -544,3 +557,34 @@ def test_snapshot_endpoint_closed_after_server_stop() -> None:
             probe.connect(("127.0.0.1", address[1]))
     finally:
         probe.close()
+
+
+def test_snapshot_audit_state_revision_and_disabled_compatibility() -> None:
+    """审计状态独立进快照；未开启时保持 enabled=False 且旧字段不变。"""
+    from sceneweave.audit.session import AuditState
+
+    history = RunSnapshotHistory()
+    log = structured_logging.SimulationLog()
+    state = AuditState(["a", "b"], {"a": "m1", "b": "m2"})
+    state.mark_checking()
+    first = build_snapshot(history, log, state)
+    assert first["audit"]["enabled"] is True
+    assert first["audit"]["status"] == "checking"
+    assert first["audit"]["revision"] == state.snapshot()["revision"]
+    assert first["version"][-1] == first["audit"]["revision"]
+    state.mark_running("a")
+    second = build_snapshot(history, log, state)
+    assert second["version"] != first["version"], "审计进度变化必须改变版本"
+    assert second["audit"]["models"][0]["status"] == "running"
+    disabled = build_snapshot(history, log)
+    assert disabled["audit"] == {
+        "enabled": False,
+        "status": "disabled",
+        "revision": 0,
+        "scope": "",
+        "error": None,
+        "evidence_count": 0,
+        "checks": [],
+        "models": [],
+        "failed_models": 0,
+    }

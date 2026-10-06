@@ -23,6 +23,8 @@ from concordia.environment.step_controller import StepData
 from concordia.utils import structured_logging
 from concordia.utils.simulation_server import SimulationServer
 
+from sceneweave.audit.session import AuditState
+
 SNAPSHOT_PATH = "/run-snapshot"
 
 # 跳过模型调用的阶段标记：这些阶段如实说明“未调用”，不伪造成调用记录。
@@ -281,6 +283,7 @@ def _stage_item(
 def build_snapshot(
     history: RunSnapshotHistory,
     log: structured_logging.SimulationLog,
+    audit_state: AuditState | None = None,
 ) -> dict[str, Any]:
     """构造只读快照；所有去重引用都在服务端解开，浏览器只见原文。
 
@@ -306,12 +309,28 @@ def build_snapshot(
             item = None
         if item is not None:
             calls.append(item)
+    audit = (
+        audit_state.snapshot()
+        if audit_state is not None
+        else {
+            "enabled": False,
+            "status": "disabled",
+            "revision": 0,
+            "scope": "",
+            "error": None,
+            "evidence_count": 0,
+            "checks": [],
+            "models": [],
+            "failed_models": 0,
+        }
+    )
     return {
-        "version": [revision, entry_count, 1 if finished else 0],
+        "version": [revision, entry_count, 1 if finished else 0, audit["revision"]],
         "finished": finished,
         "cycles": cycles,
         "final": final,
         "calls": calls,
+        "audit": audit,
     }
 
 
@@ -329,10 +348,12 @@ class SnapshotSimulationServer(SimulationServer):
         html_content: str = "",
         history: RunSnapshotHistory,
         log_provider: Callable[[], structured_logging.SimulationLog],
+        audit_state: AuditState | None = None,
     ) -> None:
         super().__init__(port=port, html_content=html_content)
         self._history = history
         self._log_provider = log_provider
+        self._audit_state = audit_state
 
     def broadcast_step(self, step_data: StepData) -> None:
         super().broadcast_step(step_data)
@@ -346,11 +367,12 @@ class SnapshotSimulationServer(SimulationServer):
         base: Any = super()._create_handler()  # type: ignore[no-untyped-call]
         history = self._history
         log_provider = self._log_provider
+        audit_state = self._audit_state
 
         class Handler(base):  # type: ignore[misc]
             def do_GET(self) -> None:
                 if self.path == SNAPSHOT_PATH:
-                    payload = build_snapshot(history, log_provider())
+                    payload = build_snapshot(history, log_provider(), audit_state)
                     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")

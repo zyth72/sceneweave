@@ -24,9 +24,13 @@ from concordia.utils import structured_logging
 
 from sceneweave.app.assembly import Assembly, assemble
 from sceneweave.app.recording import RecordedRun, write_record_manifest
+from sceneweave.audit.models import safe_error_text
+from sceneweave.audit.report import AuditSummary
+from sceneweave.audit.session import AuditSession
 from sceneweave.config.loader import AssemblyConfig
 from sceneweave.domain.tracing import TraceRecord, TurnTracer
 from sceneweave.engine.control import RunStatus
+from sceneweave.engine.scheduler import RunStopReason
 from sceneweave.integrations.concordia.sampling import (
     RecordingDirectory,
     SupportsChannelBinding,
@@ -178,6 +182,40 @@ def _summary_json(summary: RunSummary) -> dict[str, Any]:
     }
 
 
+def _audit_summary(summary: RunSummary) -> AuditSummary:
+    return AuditSummary(
+        stop_reason=summary.stop_reason,
+        final_time_ms=summary.final_time_ms,
+        completed_cycles=summary.completed_cycles,
+        world_state_version=summary.world_state_version,
+        error=summary.error,
+    )
+
+
+async def _run_audit(
+    audit: AuditSession | None,
+    config: AssemblyConfig,
+    tracer: _RunTracer,
+    summary: RunSummary,
+    out_dir: Path,
+    *,
+    incomplete: bool,
+) -> None:
+    """审计只读已导出数据；任何异常只标记状态，不掩盖模拟结果。"""
+    if audit is None:
+        return
+    try:
+        await audit.run(
+            scene=config.scene,
+            records=tracer.records,
+            summary=_audit_summary(summary),
+            output_directory=out_dir,
+            incomplete=incomplete,
+        )
+    except Exception as error:  # noqa: BLE001 双保险：审计失败不掩盖模拟
+        audit.state.mark_failed(safe_error_text(error))
+
+
 def _export(
     directory: Path,
     tracer: _RunTracer,
@@ -286,6 +324,7 @@ async def run_headless(
     record_directory: Path | None = None,
     replay_run: RecordedRun | None = None,
     should_end: Callable[[RunStatus], bool] | None = None,
+    audit: AuditSession | None = None,
 ) -> tuple[RunSummary, Path]:
     """无 UI 运行；返回 (概要, 输出目录)。
 
@@ -309,6 +348,7 @@ async def run_headless(
     else:
         effective_factory = bound_factory
     assembly: Assembly | None = None
+    exported = False
     try:
         assembly = assemble(config, effective_factory, tracer=tracer, should_end=should_end)
         result = await assembly.scheduler.run()
@@ -327,24 +367,35 @@ async def run_headless(
         except OSError as export_error:
             detail = f"运行错误：{result.error}；" if result.error else ""
             raise RunnerError(f"{detail}输出导出失败：{export_error}") from export_error
+        exported = True
+        incomplete = result.error is not None or result.reason is RunStopReason.ERROR
+        await _run_audit(audit, config, tracer, summary, out_dir, incomplete=incomplete)
         return summary, out_dir
     except asyncio.CancelledError as error:
-        _safe_export(
-            out_dir,
-            tracer,
-            _interrupt_summary(assembly, "cancelled", None),
-            _interrupt_snapshot(assembly, None),
-            error,
-        )
+        if not exported:
+            _safe_export(
+                out_dir,
+                tracer,
+                _interrupt_summary(assembly, "cancelled", None),
+                _interrupt_snapshot(assembly, None),
+                error,
+            )
+        if audit is not None:
+            audit.state.mark_cancelled()
         raise
     except BaseException as error:
+        partial_summary = _interrupt_summary(assembly, "error", str(error))
         _safe_export(
             out_dir,
             tracer,
-            _interrupt_summary(assembly, "error", str(error)),
+            partial_summary,
             _interrupt_snapshot(assembly, str(error)),
             error,
         )
+        try:
+            await _run_audit(audit, config, tracer, partial_summary, out_dir, incomplete=True)
+        except Exception:  # noqa: BLE001 审计绝不能替换模拟异常
+            pass
         raise
     finally:
         _finish_recording(recorder, record_directory, config, out_dir, sys.exception())

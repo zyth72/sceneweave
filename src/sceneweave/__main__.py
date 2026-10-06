@@ -7,9 +7,9 @@
 
 --record DIR 与 --replay 互斥。--ui [PORT] 启动真实 SimulationServer。
 
-仅 --live 在配置有效后、构造 live 工厂前，用 python-dotenv 显式加载
-当前工作目录 .env（不向上搜索；终端已有变量优先；不插值）。scripted、
-replay 与 --help 都不读取 .env，程序化工厂仍只使用已传入的环境变量。
+--live 或显式 --audit-config 用 python-dotenv 加载当前工作目录 .env
+（不向上搜索；终端已有变量优先；不插值）。未开启审计的 scripted、
+replay 与 --help 不读取 .env，程序化工厂仍只使用已传入的环境变量。
 """
 
 import argparse
@@ -25,7 +25,10 @@ from sceneweave.app.assembly import (
 )
 from sceneweave.app.recording import RecordedRun
 from sceneweave.app.runner import RunnerError, RunSummary, run_headless
+from sceneweave.audit.config import AuditModelSpec, load_audit_config
+from sceneweave.audit.session import AuditSession
 from sceneweave.config.loader import ConfigError, load_assembly_config, parse_json_object
+from sceneweave.domain.modeling import TextSampler
 from sceneweave.integrations.concordia.sampling import ReplayMismatchError
 
 
@@ -40,11 +43,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--record", metavar="DIR", type=Path, help="录制目录")
     parser.add_argument("--output", metavar="DIR", type=Path, default=None, help="输出目录")
     parser.add_argument("--ui", nargs="?", const=8080, type=int, metavar="PORT", help="启动 UI")
+    parser.add_argument(
+        "--audit-config",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help="运行后审计配置 JSON；缺省不审计、不读 .env",
+    )
     return parser
 
 
 def _load_live_dotenv() -> None:
-    """--live 分支加载当前工作目录 .env（显式路径，不向上搜索）。
+    """真实模拟或审计加载当前工作目录 .env（显式路径，不向上搜索）。
 
     只调用 python-dotenv 官方加载器：override=False 保留终端已有变量，
     interpolate=False 不解析变量引用；无 .env 文件正常沿用环境变量。
@@ -90,6 +100,39 @@ def _load_scripted(path: Path) -> Any:
     return build_scripted_factory(data)
 
 
+def _default_audit_factory(spec: AuditModelSpec) -> TextSampler:
+    """默认审计模型工厂：复用已有 live 工厂（构造不读环境、不联网）。"""
+    factory = build_live_factory(spec.factory, spec.options)
+    return factory(f"audit:{spec.model_id}")
+
+
+def _load_audit(args: Any) -> AuditSession | None:
+    """审计显式开启：严格配置 + 预构造模型；此时才读当前目录 .env。"""
+    if args.audit_config is None:
+        return None
+    audit_config = load_audit_config(args.audit_config)
+    if args.live is None:
+        _load_live_dotenv()
+    session = AuditSession(audit_config, _default_audit_factory)
+    session.prepare()
+    return session
+
+
+def _print_audit(session: AuditSession | None) -> int:
+    if session is None:
+        return 0
+    state = session.state.snapshot()
+    error = state.get("error")
+    suffix = f"（{error}）" if error else ""
+    print(f"审计状态：{state['status']}{suffix}")
+    for model in state["models"]:
+        detail = model.get("error") or model.get("summary") or ""
+        model_suffix = f" — {detail}" if detail else ""
+        print(f"  模型 {model['id']}（{model['model']}）：{model['status']}{model_suffix}")
+    failed = bool(state["failed_models"]) or state["status"] in ("failed", "cancelled")
+    return 1 if failed else 0
+
+
 def _print_result(summary: RunSummary, out_dir: Path) -> int:
     print(f"停止原因：{summary.stop_reason}")
     print(f"最终剧情时刻：{summary.final_time_ms}ms")
@@ -123,6 +166,12 @@ def main(argv: list[str] | None = None) -> int:
         config = load_assembly_config(args.config)
     except (ConfigError, OSError) as error:
         print(f"配置错误：{error}", file=sys.stderr)
+        return 2
+
+    try:
+        audit_session = _load_audit(args)
+    except (ConfigError, AssemblyError, OSError) as error:
+        print(f"审计配置错误：{error}", file=sys.stderr)
         return 2
 
     sampler_factory: Any
@@ -165,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
                 replay_run=replay_run,
                 wait_after_finish=True,
                 on_server_ready=_on_server_ready,
+                audit=audit_session,
             )
 
         try:
@@ -178,11 +228,14 @@ def main(argv: list[str] | None = None) -> int:
             OSError,
         ) as error:
             print(f"UI 运行失败：{error}", file=sys.stderr)
+            _print_audit(audit_session)
             return 1
         except KeyboardInterrupt:
             print("UI 运行被中止", file=sys.stderr)
             return 130
-        return _print_result(summary, out_dir)
+        sim_code = _print_result(summary, out_dir)
+        audit_code = _print_audit(audit_session)
+        return sim_code or audit_code
 
     async def _run_headless() -> tuple[RunSummary, Path]:
         return await run_headless(
@@ -191,18 +244,22 @@ def main(argv: list[str] | None = None) -> int:
             output_directory=args.output,
             record_directory=args.record,
             replay_run=replay_run,
+            audit=audit_session,
         )
 
     try:
         summary, out_dir = asyncio.run(_run_headless())
     except (ConfigError, RunnerError, AssemblyError, ReplayMismatchError, OSError) as error:
         print(f"运行失败：{error}", file=sys.stderr)
+        _print_audit(audit_session)
         return 1
     except KeyboardInterrupt:
         print("运行被中止", file=sys.stderr)
         return 130
 
-    return _print_result(summary, out_dir)
+    sim_code = _print_result(summary, out_dir)
+    audit_code = _print_audit(audit_session)
+    return sim_code or audit_code
 
 
 if __name__ == "__main__":

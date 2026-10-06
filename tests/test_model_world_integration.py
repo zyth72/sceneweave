@@ -120,6 +120,7 @@ def test_full_model_stack_end_to_end_with_stepdata_and_log() -> None:
             "translator.invoke",
             "system3.declare",
             "registration.commit",
+            "engine.cycle_complete",
         } <= stages
         check_raw = [
             dict(log.reconstruct_value(e.deduplicated_data))

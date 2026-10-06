@@ -30,14 +30,17 @@ from sceneweave.app.runner import (
     _interrupt_snapshot,
     _interrupt_summary,
     _prepare_directories,
+    _run_audit,
     _RunTracer,
     _safe_export,
     bind_component_channels,
 )
 from sceneweave.app.ui_snapshot import RunSnapshotHistory, SnapshotSimulationServer
+from sceneweave.audit.session import AuditSession
 from sceneweave.config.loader import AssemblyConfig
 from sceneweave.engine.control import RunStatus
 from sceneweave.engine.report import CycleReport
+from sceneweave.engine.scheduler import RunStopReason
 from sceneweave.integrations.concordia.control import (
     StepControllerGate,
     broadcast_final,
@@ -76,12 +79,14 @@ class _ManagedServer:
         *,
         history: RunSnapshotHistory,
         log_provider: Callable[[], Any],
+        audit_state: AuditSession | None = None,
     ) -> None:
         self._server = SnapshotSimulationServer(
             port=port,
             html_content=html,
             history=history,
             log_provider=log_provider,
+            audit_state=audit_state.state if audit_state is not None else None,
         )
         self._actual_port: int | None = None
         self._started = False
@@ -178,6 +183,7 @@ async def run_ui(
     should_end: Callable[[RunStatus], bool] | None = None,
     wait_after_finish: bool = True,
     on_server_ready: Callable[[str, int], None] | None = None,
+    audit: AuditSession | None = None,
 ) -> tuple[RunSummary, Path]:
     """UI 模式运行；返回 (概要, 输出目录)。
 
@@ -196,10 +202,12 @@ async def run_ui(
         port,
         history=history,
         log_provider=lambda: tracer.log,
+        audit_state=audit,
     )
     assembly: Assembly | None = None
     gate: _BroadcastingGate | None = None
     recorder: RecordingDirectory | None = None
+    exported = False
 
     try:
         managed.start()
@@ -252,6 +260,9 @@ async def run_ui(
         except OSError as export_error:
             detail = f"运行错误：{result.error}；" if result.error else ""
             raise UIRunnerError(f"{detail}输出导出失败：{export_error}") from export_error
+        exported = True
+        incomplete = result.error is not None or result.reason is RunStopReason.ERROR
+        await _run_audit(audit, config, tracer, summary, out_dir, incomplete=incomplete)
         if wait_after_finish:
             try:
                 input("按回车退出并关闭服务器...")
@@ -259,22 +270,30 @@ async def run_ui(
                 pass  # 运行已结束，回车/EOF/Ctrl+C 都退出查看。
         return summary, out_dir
     except asyncio.CancelledError as error:
-        _safe_export(
-            out_dir,
-            tracer,
-            _interrupt_summary(assembly, "cancelled", None),
-            _interrupt_snapshot(assembly, None),
-            error,
-        )
+        if not exported:
+            _safe_export(
+                out_dir,
+                tracer,
+                _interrupt_summary(assembly, "cancelled", None),
+                _interrupt_snapshot(assembly, None),
+                error,
+            )
+        if audit is not None:
+            audit.state.mark_cancelled()
         raise
     except BaseException as error:
+        partial_summary = _interrupt_summary(assembly, "error", str(error))
         _safe_export(
             out_dir,
             tracer,
-            _interrupt_summary(assembly, "error", str(error)),
+            partial_summary,
             _interrupt_snapshot(assembly, str(error)),
             error,
         )
+        try:
+            await _run_audit(audit, config, tracer, partial_summary, out_dir, incomplete=True)
+        except Exception:  # noqa: BLE001 审计绝不能替换模拟异常
+            pass
         raise
     finally:
         if gate is not None:
