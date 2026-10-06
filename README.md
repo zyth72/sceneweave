@@ -92,9 +92,8 @@ uv run --locked python -m sceneweave examples/configs/run.json \
 uv run --locked python -m sceneweave config.json \
     --live my_module:my_factory --live-options '{"model": "xxx"}'
 
-# live 模式：内置 OpenAI 兼容 Chat Completions 工厂（示例供应商为 DeepSeek，仅为示例；
-# 真实付费 API 未在本项目实测）
-export DEEPSEEK_API_KEY=...   # 只从显式指定的环境变量读取；不读 .env 或全局凭据
+# live 模式：内置 OpenAI 兼容 Chat Completions 工厂（DeepSeek 小场景已实测连通）
+cp .env.example .env          # 从项目根目录运行；填入 DEEPSEEK_API_KEY，.env 已被忽略
 uv run --locked python -m sceneweave examples/configs/run.json \
     --live sceneweave.integrations.concordia.chat_completions:create_model \
     --live-options '{"base_url": "https://api.deepseek.com", "model": "deepseek-flash", "api_key_env": "DEEPSEEK_API_KEY"}'
@@ -134,7 +133,7 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
     return MyModel()
 ```
 
-统一入口使用 Concordia 的 `LanguageModel` 抽象接口，具体模型后端由工厂注入。
+统一入口使用 Concordia 的 `LanguageModel` 抽象接口，具体模型后端由工厂注入。`--live` 在配置文件校验通过后、构造 live 工厂前，用 python-dotenv 显式加载当前工作目录 `.env`（路径固定为 `Path.cwd()/'.env'`，不向上搜索；`override=False` 保留终端已设置的变量；`interpolate=False` 不解析变量引用；缺失文件正常沿用环境变量）。`--scripted`、`--replay` 与 `--help` 不读取 `.env`；程序化调用工厂仍只使用调用方已传入的环境变量。加载异常按配置错误以非零状态退出，只报异常类别，不回显文件内容或任何值。
 
 ### 内置 Chat Completions 后端
 
@@ -145,11 +144,11 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
 - 每个作用域一个独立实例；每次 `sample_text` 新建并关闭独立连接（不引入长期 HTTP 连接），`max_retries=0`、禁止重定向（不把密钥转发到其它 host）；请求只含单条 user 消息、`stream=false`、`n=1`，不共享对话历史。
 - 客户端关闭失败明确报错；若请求已有错误，关闭失败只追加不含原始正文的说明，保留请求错误。
 - 只接受 `finish_reason="stop"`、`message.role="assistant"` 且 content 为非空字符串的单个文本响应；截断（length）、工具调用、空/null、choice 数量异常、错误角色、缺字段、非 JSON 都抛明确异常，错误消息只报稳定类别与数量，不插入上游字段值；坏输出不会被当作成功文本。超时、连接失败、401/429/500 等分类为可诊断异常并携带状态码，异常消息不含密钥、Authorization、上游正文或提示原文。
-- 只从 `api_key_env` 指定的环境变量读取密钥，不读 `.env`、不使用 `OPENAI_API_KEY` 等全局回退；SDK 的组织/项目/管理员/自定义请求头环境变量被显式压制（检测到 `OPENAI_CUSTOM_HEADERS` 直接拒绝）。
+- 只从 `api_key_env` 指定的环境变量读取密钥，不读 `.env`、不使用 `OPENAI_API_KEY` 等全局回退；统一 CLI 的 `--live` 会先把当前工作目录 `.env` 显式加载进进程环境（见「配置与统一运行入口」），适配器自身仍只读已传入的环境变量。SDK 的组织/项目/管理员/自定义请求头环境变量被显式压制（检测到 `OPENAI_CUSTOM_HEADERS` 直接拒绝）。
 - `timeout_seconds` 是 SDK/HTTP 客户端的连接与读写等待超时，不是整次调用的绝对墙钟 deadline；本项目没有整次调用的墙钟总预算。
 - `sample_choice` 不在本项目运行链中，显式 `NotImplementedError`，不伪造概率或默认选项。
 
-`--replay` 只读录制目录，不导入 live 工厂、不读密钥、不联网。示例供应商（DeepSeek）的请求/响应约定参考[官方 Chat Completion 文档](https://api-docs.deepseek.com/api/create-chat-completion)；供应商与模型必须由用户显式配置，适配器不自动选择，也不把 SDK 默认当作实际供应商。真实付费 API 尚未在本项目实测，不声称速度或费用。
+`--replay` 只读录制目录，不导入 live 工厂、不读密钥、不联网。示例供应商（DeepSeek）的请求/响应约定参考[官方 Chat Completion 文档](https://api-docs.deepseek.com/api/create-chat-completion)；供应商与模型必须由用户显式配置，适配器不自动选择，也不把 SDK 默认当作实际供应商。2026-10-06 已用 `deepseek-flash` 跑通仓库小场景：9 次真实调用、2 个完整周期，在 8000ms 剧情时限正常停止，无运行错误；角色选择维持现状，没有新增行动。这只验证当前小场景的真实调用链，不代表复杂互动效果、提示调优、速度或费用已验证。
 
 作用域命名空间（避免角色 ID 与 World 作用域碰撞）：`role:{角色}`、`translator:{角色}`、`world:check:{角色}`、`world:progress`、`world:adjudicate`，每作用域采样器只构造一次并缓存，录制目录按作用域独立文件。角色私人 background 只进该角色的 `ModelRole` 提示，不进入 World 场景或其他任何作用域的提示（有测试断言零泄漏）。
 
@@ -193,4 +192,4 @@ Concordia 接入：结构化/组件日志见 `integrations/concordia/tracing.py`
 
 模型驱动的 System1/2/3 已由 `ModelRole` 与 `roles/components/` 落实：组件经可注入的 `TextSampler` 协议调用模型，`integrations/concordia/sampling.py` 提供真实 Concordia `LanguageModel` 的异步桥（采样经真实 `ComponentWithLogging` 组件把原始输入/输出写入 `SimulationLog`；`channel_for` 按阶段建立通道，datum 标记实际阶段），以及按作用域（角色）隔离的录制/重放：跨角色并行采样的完成顺序不确定，共享单个录制文件无法重放，`RecordingDirectory`/`ReplayDirectory` 为每个角色生成独立文件即可确定性重放整个多角色运行；录制包含失败调用（重放重现原错误身份），请求逐条严格匹配、错配不消费记录。注意：线程中的同步模型调用无法被硬取消——取消/超时只放弃等待，底层调用会继续到自然返回。阶段记录（提示、原始输出、解析结果、跳过/重试/错误与周期/角色/响应/行动/剧情时间身份）写入与调度器相同的因果链，追踪器自身失败不掩盖模型/解析异常。每个阶段（含跳过）都有测试与端到端集成（ModelRole + 假 World/Translator + Scheduler + 结构化日志 + StepData，含双角色并行录制重放回归）。生产语义的具体提示工程与真实模型参数调优未在本批验证（测试与演示使用脚本假模型）。
 
-尚未实现：场景自然结束条件的场景侧定义（`should_end` 可由装配注入，具体场景规则需自行提供，时限不是自然结束）；内置 Chat Completions 工厂已提供，并以真实 openai SDK（仅连本地假 HTTP 端点）覆盖协议参数、错误/超时/重定向、组件日志与录制重放，但真实付费 API 上的连通、提示工程与模型参数调优仍未实测（不声称速度或费用）。统一入口 `--ui` 已接入真实 `SimulationServer`/`StepControllerGate`/周期与最终广播；组件日志通道由运行编排统一注入（含录制/重放模式）。其余缺口以可注入接口承接，示例中的脚本实现明确标注为演示用假件（脚本世界裁决的内置逻辑仅为演示行走语义，不是通用 World 物理；显式提供的 World 组件脚本优先执行，耗尽直接报错）。
+尚未实现：场景自然结束条件的场景侧定义（`should_end` 可由装配注入，具体场景规则需自行提供，时限不是自然结束）；内置 Chat Completions 工厂已提供，并以真实 openai SDK 连本地假 HTTP 端点覆盖协议参数、错误/超时/重定向、组件日志与录制重放；DeepSeek 真实小场景已验证连通，复杂互动效果、提示工程与模型参数调优仍待验证（不声称速度或费用）。统一入口 `--ui` 已接入真实 `SimulationServer`/`StepControllerGate`/周期与最终广播；组件日志通道由运行编排统一注入（含录制/重放模式）。其余缺口以可注入接口承接，示例中的脚本实现明确标注为演示用假件（脚本世界裁决的内置逻辑仅为演示行走语义，不是通用 World 物理；显式提供的 World 组件脚本优先执行，耗尽直接报错）。

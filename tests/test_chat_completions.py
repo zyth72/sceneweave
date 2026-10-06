@@ -709,6 +709,7 @@ def test_cli_builtin_factory_config_error_is_clean_and_offline(
     from sceneweave.__main__ import main
 
     config = Path(__file__).resolve().parents[1] / "examples" / "configs" / "run.json"
+    monkeypatch.chdir(tmp_path)  # live 入口只能读取临时目录，避免加载项目真实 .env。
     monkeypatch.setenv(_KEY_ENV, _KEY)
     with _server(_echo) as server:
         code = main(

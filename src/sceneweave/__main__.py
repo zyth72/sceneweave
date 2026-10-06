@@ -6,6 +6,10 @@
   --replay record_dir                重放录制目录（不导入 live 工厂）
 
 --record DIR 与 --replay 互斥。--ui [PORT] 启动真实 SimulationServer。
+
+仅 --live 在配置有效后、构造 live 工厂前，用 python-dotenv 显式加载
+当前工作目录 .env（不向上搜索；终端已有变量优先；不插值）。scripted、
+replay 与 --help 都不读取 .env，程序化工厂仍只使用已传入的环境变量。
 """
 
 import argparse
@@ -37,6 +41,25 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", metavar="DIR", type=Path, default=None, help="输出目录")
     parser.add_argument("--ui", nargs="?", const=8080, type=int, metavar="PORT", help="启动 UI")
     return parser
+
+
+def _load_live_dotenv() -> None:
+    """--live 分支加载当前工作目录 .env（显式路径，不向上搜索）。
+
+    只调用 python-dotenv 官方加载器：override=False 保留终端已有变量，
+    interpolate=False 不解析变量引用；无 .env 文件正常沿用环境变量。
+    读取失败只报异常类别，不回显文件内容或任何值。
+    """
+    from dotenv import load_dotenv
+
+    try:
+        load_dotenv(
+            dotenv_path=Path.cwd() / ".env",
+            override=False,
+            interpolate=False,
+        )
+    except (OSError, UnicodeError, ValueError) as error:
+        raise ConfigError(f"当前工作目录 .env 加载失败（{type(error).__name__}）") from None
 
 
 def _load_scripted(path: Path) -> Any:
@@ -107,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.live is not None:
             options = parse_json_object(args.live_options, "--live-options")
+            _load_live_dotenv()
             sampler_factory = build_live_factory(args.live, options)
         elif args.scripted is not None:
             sampler_factory = _load_scripted(args.scripted)
