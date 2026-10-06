@@ -51,6 +51,7 @@ from sceneweave.domain.messages import (
 from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.tracing import TraceRecord, TurnTracer
 from sceneweave.domain.translation import (
+    ActionArrangement,
     ActionSchedule,
     ModifiedActionSchedule,
     TranslationRequest,
@@ -164,7 +165,9 @@ class DemoWorld(World):
             passive_processes=tuple(self._passive),
         )
 
-    async def check_response(self, response: RoleResponse) -> ActionCheckResult:
+    async def check_response(
+        self, response: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+    ) -> ActionCheckResult:
         blocked = tuple(
             item.action_id
             for item in response.actions

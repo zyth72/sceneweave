@@ -36,6 +36,7 @@ from sceneweave.domain.messages import (
 )
 from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.tracing import TraceRecord
+from sceneweave.domain.translation import ActionArrangement
 from sceneweave.engine.responses import ResponseRunner
 from sceneweave.integrations.concordia.tracing import (
     SimulationLogTracer,
@@ -96,7 +97,9 @@ class CheckingWorld(World):
     def diagnostic_snapshot(self) -> WorldDiagnostic:
         return WorldDiagnostic(world_state_version=self.state_version)
 
-    async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
+    async def check_response(
+        self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+    ) -> ActionCheckResult:
         blocked = tuple(
             item.action_id
             for item in candidate.actions
@@ -351,9 +354,11 @@ def test_cycle_error_and_cancellation_leave_traces() -> None:
         def state_version(self) -> WorldStateVersion:
             return WorldStateVersion(self._v)
 
-        async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
+        async def check_response(
+            self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        ) -> ActionCheckResult:
             self.checks += 1
-            result = await super().check_response(candidate)
+            result = await super().check_response(candidate, arrangements=arrangements)
             if self.checks > 1:
                 self._v = 1
             return result

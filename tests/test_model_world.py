@@ -30,12 +30,15 @@ from sceneweave.domain.identity import (
     WorldStateVersion,
 )
 from sceneweave.domain.messages import (
+    ActionPhase,
+    MaintainAction,
     NewAction,
     RoleResponse,
     WorldEvent,
 )
 from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.tracing import TraceRecord, TurnTracer
+from sceneweave.domain.translation import ActionArrangement
 from sceneweave.world.model_world import ModelWorld, ModelWorldError
 from sceneweave.world.scene import find_object, load_scene_card
 
@@ -351,6 +354,91 @@ def test_check_prompt_hides_closed_container_contents() -> None:
         [(_, prompt)] = brain.prompts
         assert "铜钥匙" not in prompt, "隐藏物品不得进入检查模型输入"
         assert "抽屉" in prompt, "关闭容器本身可见"
+
+    asyncio.run(scenario())
+
+
+def test_check_prompt_carries_registered_arrangements_without_actual_start() -> None:
+    """未实际开始的已登记安排进入检查上下文；登记不等于实际开始。"""
+
+    async def scenario() -> None:
+        world, brain = brain_world()
+        arrangement = ActionArrangement(
+            action_id=ActionId("a-shen-1"),
+            phase=ActionPhase.REGISTERED,
+            description="伸手取回密封文件",
+            start=SimulationTime(200),
+            expected_end=SimulationTime(1700),
+            checkpoints=(SimulationTime(700),),
+        )
+        result = await world.check_response(
+            response_for("shen", (MaintainAction(ActionId("a-shen-1")),)),
+            arrangements=(arrangement,),
+        )
+        assert result.passed
+        [(component, prompt)] = brain.prompts
+        assert component == "world-check"
+        assert (
+            "- a-shen-1（registered）：伸手取回密封文件，原安排 200→1700ms，过程节点 [700]"
+            in prompt
+        )
+        assert "已登记安排" in prompt and "实际行动状态" in prompt
+        diagnostic = world.diagnostic_snapshot()
+        assert diagnostic.action_states == (), "登记不当作实际开始"
+        assert diagnostic.world_state_version == WorldStateVersion(0)
+
+    asyncio.run(scenario())
+
+
+def test_check_context_never_leaks_other_roles_arrangement() -> None:
+    """检查上下文只含本角色安排，不泄漏另一角色安排。"""
+
+    async def scenario() -> None:
+        world, brain = brain_world()
+        lin_arrangement = ActionArrangement(
+            action_id=ActionId("a-lin-1"),
+            phase=ActionPhase.STARTED,
+            description="林舟的持握动作",
+            start=SimulationTime(100),
+            expected_end=SimulationTime(900),
+        )
+        shen_arrangement = ActionArrangement(
+            action_id=ActionId("a-shen-1"),
+            phase=ActionPhase.REGISTERED,
+            description="沈言的伸手动作",
+            start=SimulationTime(200),
+            expected_end=SimulationTime(1700),
+        )
+        await world.check_response(response_for("lin", ()), arrangements=(lin_arrangement,))
+        await world.check_response(response_for("shen", ()), arrangements=(shen_arrangement,))
+        prompts = [prompt for _, prompt in brain.prompts]
+        lin_prompt = next(prompt for prompt in prompts if "角色 lin" in prompt)
+        shen_prompt = next(prompt for prompt in prompts if "角色 shen" in prompt)
+        assert "林舟的持握动作" in lin_prompt and "林舟的持握动作" not in shen_prompt
+        assert "沈言的伸手动作" in shen_prompt and "沈言的伸手动作" not in lin_prompt
+
+    asyncio.run(scenario())
+
+
+def test_check_rejects_invalid_arrangements_before_model_call() -> None:
+    """安排结构在模型调用前校验，非法输入不改状态。"""
+
+    async def scenario() -> None:
+        world, brain = brain_world()
+        response = response_for("lin", ())
+        arrangement = ActionArrangement(
+            action_id=ActionId("a-1"),
+            phase=ActionPhase.REGISTERED,
+            description="安排",
+            start=SimulationTime(100),
+            expected_end=SimulationTime(900),
+        )
+        with pytest.raises(ModelWorldError, match="ActionArrangement"):
+            await world.check_response(response, arrangements=("坏安排",))  # type: ignore[arg-type]
+        with pytest.raises(ModelWorldError, match="重复"):
+            await world.check_response(response, arrangements=(arrangement, arrangement))
+        assert brain.prompts == [], "结构错误在模型调用前拒绝"
+        assert world.diagnostic_snapshot().world_state_version == WorldStateVersion(0)
 
     asyncio.run(scenario())
 

@@ -380,6 +380,17 @@ def test_modification_cannot_rewrite_history_and_is_rejected() -> None:
         record = scheduler.action_records()[ActionId("a-walk")]
         assert record.checkpoints == (ms(1900),), "打回候选不生效，原安排保留"
         assert record.expected_end == ms(3000)
+        # 翻译打回后的重新检查拿到同一周期的原登记安排。
+        post_rejection = next(
+            arrangements
+            for candidate, arrangements in world.checks
+            if candidate.response_id == ResponseId("r-4")
+        )
+        by_id = {item.action_id: item for item in post_rejection}
+        assert set(by_id) == {ActionId("a-walk")}, "被拒修改候选不进入安排上下文"
+        walk = by_id[ActionId("a-walk")]
+        assert walk.description == "散步" and walk.start == ms(900)
+        assert walk.expected_end == ms(3000) and walk.checkpoints == (ms(1900),)
 
     asyncio.run(scenario())
 

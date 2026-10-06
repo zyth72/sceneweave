@@ -16,6 +16,7 @@ from sceneweave.domain.adjudication import (
 from sceneweave.domain.identity import ActionId, CycleId, EventId, RoleId, WorldStateVersion
 from sceneweave.domain.messages import ActionCheckResult, Delivery, RoleResponse, WorldEvent
 from sceneweave.domain.time import SimulationTime
+from sceneweave.domain.translation import ActionArrangement
 
 
 class World(ABC):
@@ -66,7 +67,9 @@ class World(ABC):
         """
 
     @abstractmethod
-    async def check_response(self, response: RoleResponse) -> ActionCheckResult:
+    async def check_response(
+        self, response: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+    ) -> ActionCheckResult:
         """对完整主动行为声明的无副作用检查。
 
         基于事件落地后的共同状态检查整个集合（含义、当前步骤边界、
@@ -74,6 +77,11 @@ class World(ABC):
         项；只产生结果：不调用角色、不提交事实、不取消或预登记行动。
         结果记录所依据的世界状态版本。语义判断可由模型承担，运行时
         校验负责结构与一致性。
+
+        arrangements 是该角色由引擎提供的只读既有安排快照（可为空
+        元组，兼容独立新声明入口）：只供检查维持/修改与既有安排的
+        关系，World 不得写入或缓存为已登记事实，也不得把登记当作
+        实际开始；登记等待中的行动仍可被主动维持。
         """
 
     @abstractmethod

@@ -72,8 +72,11 @@ def build_prompt(
         "不能在描述里预设自己已经成功，也不能替其他主体的自主反应作决定。",
         "例如你距离想拿取的物品还有约 1.4 米、尚不可触及时，先提交“靠近到可触及位置”这一步，"
         "等待到达反馈后再在另一轮决定是否拿取；已经站在可触及时，直接提交拿取尝试即可。",
-        "做法不可行时设 retry=true 并说明原因；意向本身无法落实时设 feasible=false"
-        " 并说明原因；两者不能同时成立。",
+        "三种输出互斥：正式声明为 feasible=true、retry=false，携带完整行动声明（maintain/modify/new_actions）；"
+        "内部重做为 feasible=true、retry=true；意向不可行为 feasible=false、retry=false。"
+        "后两种 reason 必填，且 maintain/modify/new_actions 必须全为空；feasible=false 不能同时 retry=true。",
+        "retry 或 feasible=false 是内部反馈，不是向引擎提交空集合，也不会取消已接受行动；"
+        "若你已明确修正做法，请直接输出正式 feasible=true、retry=false 的完整声明，不要用 retry=true 再携带行动。",
         "只输出一个 JSON 对象，只含 schema 字段，四个必填键一个都不能省：",
         SCHEMA,
     ]

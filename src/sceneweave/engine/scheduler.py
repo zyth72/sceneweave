@@ -317,7 +317,11 @@ class Scheduler:
         )
         self._registry = ActionRegistry()
         self._runner = ResponseRunner(
-            self._roles.values(), world, tracer=tracer, max_rejections=max_rejections
+            self._roles.values(),
+            world,
+            tracer=tracer,
+            max_rejections=max_rejections,
+            arrangements_for=lambda role_id: self._registry.arrangements_for(role_id),
         )
         self._cycle_seq = 0
         self._completed_cycles = 0
@@ -1166,9 +1170,12 @@ class Scheduler:
                     related_response_id=previous_id,
                     outputs=_action_texts(response),
                 )
-                check = await self._world.check_response(response)
+                check = await self._world.check_response(response, arrangements=arrangements)
                 self._require_valid_check(check, response, base_version)
-                check_details: dict[str, TraceValue] = {"passed": check.passed}
+                check_details: dict[str, TraceValue] = {
+                    "passed": check.passed,
+                    "arrangements": len(arrangements),
+                }
                 if check.reason:
                     check_details["reason"] = check.reason
                 self._trace(

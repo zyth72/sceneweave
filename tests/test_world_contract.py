@@ -38,7 +38,7 @@ from sceneweave.domain.messages import (
     RoleResponse,
 )
 from sceneweave.domain.time import SimulationTime
-from sceneweave.domain.translation import TranslationRequest
+from sceneweave.domain.translation import ActionArrangement, TranslationRequest
 from sceneweave.world.base import World
 
 
@@ -68,7 +68,9 @@ class MiniWorld(World):
     def diagnostic_snapshot(self) -> WorldDiagnostic:
         return WorldDiagnostic(world_state_version=self._version)
 
-    async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
+    async def check_response(
+        self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+    ) -> ActionCheckResult:
         blocked = tuple(
             item.action_id
             for item in candidate.actions

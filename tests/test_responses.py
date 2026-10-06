@@ -25,6 +25,7 @@ from sceneweave.domain.identity import (
 )
 from sceneweave.domain.messages import (
     ActionCheckResult,
+    ActionPhase,
     MaintainAction,
     ModifiedAction,
     NewAction,
@@ -35,6 +36,7 @@ from sceneweave.domain.messages import (
     TurnInput,
 )
 from sceneweave.domain.time import SimulationTime
+from sceneweave.domain.translation import ActionArrangement
 from sceneweave.engine.responses import ResponseRunner
 from sceneweave.roles.base import Role
 from sceneweave.world.base import World
@@ -86,6 +88,16 @@ def new_action(
 
 def modified(action_id: str, change: str = "改为更慢的速度") -> ModifiedAction:
     return ModifiedAction(ActionId(action_id), change)
+
+
+def arrangement(action_id: str, *, description: str = "既有安排") -> ActionArrangement:
+    return ActionArrangement(
+        action_id=ActionId(action_id),
+        phase=ActionPhase.REGISTERED,
+        description=description,
+        start=SimulationTime(100),
+        expected_end=SimulationTime(900),
+    )
 
 
 class SceneRole(Role):
@@ -140,6 +152,7 @@ class ScriptedWorld(World):
         self._forbidden = forbidden
         self._version = WorldStateVersion(0)
         self.checked: list[RoleResponse] = []
+        self.checked_arrangements: list[tuple[RoleId, tuple[ActionArrangement, ...]]] = []
 
     @property
     def state_version(self) -> WorldStateVersion:
@@ -158,8 +171,11 @@ class ScriptedWorld(World):
     def diagnostic_snapshot(self) -> WorldDiagnostic:
         return WorldDiagnostic(world_state_version=self._version)
 
-    async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
+    async def check_response(
+        self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+    ) -> ActionCheckResult:
         self.checked.append(candidate)
+        self.checked_arrangements.append((candidate.role_id, tuple(arrangements)))
         related = tuple(
             item.action_id
             for item in candidate.actions
@@ -367,10 +383,71 @@ def test_role_error_propagates_without_partial_result() -> None:
     asyncio.run(scenario())
 
 
+def test_runner_freezes_per_role_arrangements_for_all_checks() -> None:
+    """周期开始时冻结本角色安排；初检与打回重查共用同一快照。"""
+
+    async def scenario() -> None:
+        fetched: list[RoleId] = []
+        snapshot = {
+            RoleId("alice"): (arrangement("a-1", description="爱丽丝的安排"),),
+            RoleId("bob"): (arrangement("b-1", description="鲍勃的安排"),),
+        }
+
+        def arrangements_for(role_id: RoleId) -> tuple[ActionArrangement, ...]:
+            fetched.append(role_id)
+            return snapshot[role_id]
+
+        world = ScriptedWorld(("不可能行动",))
+        alice = SceneRole(
+            "alice",
+            response("alice", "r-1", (maintain("a-1"), new_action("a-9", "不可能行动"))),
+            [response("alice", "r-2", (maintain("a-1"),))],
+        )
+        bob = SceneRole("bob", response("bob", "r-b", (maintain("b-1"),)))
+        runner = ResponseRunner([alice, bob], world, arrangements_for=arrangements_for)
+        outcome = await runner.run_cycle(both_inputs())
+        assert set(outcome.accepted) == {RoleId("alice"), RoleId("bob")}
+        assert sorted(fetched, key=str) == [RoleId("alice"), RoleId("bob")], (
+            "每角色周期开始只取一次"
+        )
+        alice_checks = [item for item in world.checked_arrangements if item[0] == RoleId("alice")]
+        assert alice_checks == [
+            (RoleId("alice"), snapshot[RoleId("alice")]),
+            (RoleId("alice"), snapshot[RoleId("alice")]),
+        ], "初检与打回重查共用同一冻结快照"
+        bob_checks = [item for item in world.checked_arrangements if item[0] == RoleId("bob")]
+        assert bob_checks == [(RoleId("bob"), snapshot[RoleId("bob")])], "角色作用域不混用"
+        assert all(
+            item.action_id != ActionId("a-9")
+            for _, arrangements in world.checked_arrangements
+            for item in arrangements
+        ), "被打回的新候选不进入安排上下文"
+
+    asyncio.run(scenario())
+
+
+def test_runner_rejects_non_arrangement_context_before_role_processing() -> None:
+    """非 ActionArrangement 的既有安排来源在角色处理前被拒绝。"""
+
+    async def scenario() -> None:
+        def arrangements_for(role_id: RoleId) -> tuple[Any, ...]:
+            return ("坏安排",)
+
+        alice = SceneRole("alice", response("alice", "r-a"))
+        runner = ResponseRunner([alice], ScriptedWorld(), arrangements_for=arrangements_for)
+        with pytest.raises(ValueError, match="ActionArrangement"):
+            await runner.run_cycle({RoleId("alice"): turn("alice")})
+        assert alice.perceived == [], "安排结构错误在角色处理前拒绝"
+
+    asyncio.run(scenario())
+
+
 def test_check_result_must_match_the_checked_response() -> None:
     class MismatchedWorld(ScriptedWorld):
-        async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
-            result = await super().check_response(candidate)
+        async def check_response(
+            self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        ) -> ActionCheckResult:
+            result = await super().check_response(candidate, arrangements=arrangements)
             return ActionCheckResult(
                 cycle_id=result.cycle_id,
                 role_id=result.role_id,
@@ -400,9 +477,11 @@ def test_check_result_based_on_newer_state_is_rejected() -> None:
             super().__init__(("不可能的行动",))
             self.checks_made = 0
 
-        async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
+        async def check_response(
+            self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        ) -> ActionCheckResult:
             self.checks_made += 1
-            result = await super().check_response(candidate)
+            result = await super().check_response(candidate, arrangements=arrangements)
             if self.checks_made > 1:
                 self._version = WorldStateVersion(self._version + 1)
             return result
@@ -429,11 +508,13 @@ def test_check_result_claiming_newer_state_is_rejected() -> None:
             super().__init__(("不可能的行动",))
             self.checks_made = 0
 
-        async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
+        async def check_response(
+            self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        ) -> ActionCheckResult:
             self.checks_made += 1
             if self.checks_made > 1:
                 self._version = WorldStateVersion(self._version + 1)
-            return await super().check_response(candidate)
+            return await super().check_response(candidate, arrangements=arrangements)
 
     async def scenario() -> None:
         failing = new_action("a-1", "不可能的行动")
@@ -622,7 +703,9 @@ def test_role_returning_non_response_is_rejected_cleanly() -> None:
 
 def test_world_returning_non_check_result_is_rejected_cleanly() -> None:
     class BrokenWorld(ScriptedWorld):
-        async def check_response(self, candidate: RoleResponse) -> Any:
+        async def check_response(
+            self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        ) -> Any:
             return {"passed": True}
 
     async def scenario() -> None:
@@ -640,8 +723,10 @@ def test_world_returning_non_check_result_is_rejected_cleanly() -> None:
 
 def test_check_may_only_reference_declared_actions() -> None:
     class OffTopicWorld(ScriptedWorld):
-        async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
-            result = await super().check_response(candidate)
+        async def check_response(
+            self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        ) -> ActionCheckResult:
+            result = await super().check_response(candidate, arrangements=arrangements)
             return ActionCheckResult(
                 cycle_id=result.cycle_id,
                 role_id=result.role_id,

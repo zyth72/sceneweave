@@ -24,7 +24,16 @@ from sceneweave.translator.model_translator import ModelTranslator
 from sceneweave.world.model_world import ModelWorld
 from sceneweave.world.scene import find_object, load_scene_card
 
-from .fakes import ScriptedSampler, rid
+from .fakes import (
+    ScriptedRole,
+    ScriptedSampler,
+    ScriptedTranslator,
+    maintain,
+    maintaining,
+    new_action,
+    response,
+    rid,
+)
 from .test_model_world import Brain, study_card
 
 S1_GO = '{"reconsider": true, "note": "门被推开了"}'
@@ -124,6 +133,60 @@ def test_full_model_stack_end_to_end_with_stepdata_and_log() -> None:
         assert "lin" in data.entity_actions
         diagnostic = report.world_diagnostic
         assert diagnostic is not None and diagnostic.action_states
+
+    asyncio.run(scenario())
+
+
+def test_check_context_gives_waiting_maintain_its_registered_arrangement() -> None:
+    """另一角色较早开始事件触发检查时，尚未开始的已登记维持拿到安排上下文。"""
+
+    async def scenario() -> None:
+        brain = Brain()
+        world = ModelWorld(
+            scene=load_scene_card(study_card()),
+            sampler_for_scope=lambda scope: brain,
+            roles=(rid("lin"), rid("shen")),
+        )
+        lin = ScriptedRole(
+            "lin",
+            [response("lin", "r-lin-1", (new_action("a-lin-1", "林舟行动"),))],
+            fallback=maintaining("lin", "a-lin-1"),
+        )
+        shen = ScriptedRole(
+            "shen",
+            [
+                response("shen", "r-shen-1", (new_action("a-shen-1", "沈言行动"),)),
+                response("shen", "r-shen-2", (maintain("a-shen-1"),)),
+            ],
+            fallback=maintaining("shen", "a-shen-1"),
+        )
+        scheduler = Scheduler(
+            roles=[lin, shen],
+            world=world,
+            translator=ScriptedTranslator(
+                plans={"林舟行动": (100, 4000, ()), "沈言行动": (600, 4000, ())}
+            ),
+            config=RunConfig(introspection_interval=ms(10_000), max_duration=ms(2000)),
+            initial_events=[WorldEvent(EventId("startup"), SimulationTime(0), "开场")],
+        )
+        result = await scheduler.run()
+        assert result.reason is RunStopReason.TIME_LIMIT
+        shen_checks = [
+            prompt
+            for component, prompt in brain.prompts
+            if component == "world-check" and "角色 shen" in prompt
+        ]
+        waiting = [
+            prompt
+            for prompt in shen_checks
+            if "a-shen-1（registered）" in prompt and "沈言行动" in prompt
+        ]
+        assert waiting, "等待中的已登记行动进入检查提示，而非只给维持身份"
+        assert "World 实际行动状态（已提交事实）：" in waiting[0]
+        assert "a-lin-1" not in waiting[0], "不泄漏另一角色的安排"
+        assert scheduler.action_records()[ActionId("a-shen-1")].phase is ActionPhase.STARTED, (
+            "后续节点已实际开始，证明此前的 registered 检查确实发生在开始之前"
+        )
 
     asyncio.run(scenario())
 

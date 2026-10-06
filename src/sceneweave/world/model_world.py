@@ -69,6 +69,7 @@ from sceneweave.domain.model_json import (
 from sceneweave.domain.modeling import TextSampler
 from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.tracing import TraceRecord, TraceValue, TurnTracer
+from sceneweave.domain.translation import ActionArrangement
 from sceneweave.world.base import World
 from sceneweave.world.scene import (
     MoveObjectPatch,
@@ -298,17 +299,22 @@ class ModelWorld(World):
 
     # ---- world.base.World 接口 ----
 
-    async def check_response(self, response: RoleResponse) -> ActionCheckResult:
+    async def check_response(
+        self, response: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+    ) -> ActionCheckResult:
         """基于共同版本对完整主动集合的无副作用检查。
 
-        提示只携带该角色可见的场景投影与自身行动状态；不同角色并行、
-        同角色串行。语义由模型判断，结构错误是运行错误。
+        提示分别携带该角色可见的场景投影、引擎给出的只读既有安排
+        快照与 World 实际状态；不同角色并行、同角色串行。安排只供
+        检查，不写入事实、不当作实际开始或角色感知。语义由模型判断，
+        结构错误是运行错误。
         """
+        frozen_arrangements = self._frozen_arrangements(arrangements)
         scope = f"world-check-{response.role_id}"
         # 检查依据进入时的共同版本与已知剧情时刻；等待期间事实冻结。
         base_version = self._version
         base_time = self._current_time
-        prompt = self._check_prompt(response)
+        prompt = self._check_prompt(response, frozen_arrangements)
         raw: str | None = None
         self._require_scope_free(scope)
         self._require_no_writer("检查")
@@ -325,7 +331,11 @@ class ModelWorld(World):
                 action_ids=tuple(i.action_id for i in response.actions),
                 inputs=(prompt,),
                 outputs=(),
-                details={"scope": scope, "world_state_version": self._version},
+                details={
+                    "scope": scope,
+                    "world_state_version": self._version,
+                    "arrangements": len(frozen_arrangements),
+                },
             )
             error_kind = "采样"
             raw = await self._sampler_for(scope).sample(prompt, component="world-check")
@@ -1194,7 +1204,23 @@ class ModelWorld(World):
         visible_ids = {obj.id for obj in self._scene.walk() if self._is_visible_to(role_id, obj.id)}
         return describe_scene(self._scene, only_ids=sorted(visible_ids))
 
-    def _check_prompt(self, response: RoleResponse) -> str:
+    @staticmethod
+    def _frozen_arrangements(
+        arrangements: Sequence[ActionArrangement],
+    ) -> tuple[ActionArrangement, ...]:
+        """模型调用前的必要结构检查；只读，不写入或缓存任何安排。"""
+        if isinstance(arrangements, (str, bytes)) or not isinstance(arrangements, Sequence):
+            raise ModelWorldError("检查的 arrangements 必须是 ActionArrangement 序列")
+        frozen = tuple(arrangements)
+        if not all(isinstance(item, ActionArrangement) for item in frozen):
+            raise ModelWorldError("检查的 arrangements 每项必须是 ActionArrangement")
+        if len({item.action_id for item in frozen}) != len(frozen):
+            raise ModelWorldError("检查的 arrangements 行动身份重复")
+        return frozen
+
+    def _check_prompt(
+        self, response: RoleResponse, arrangements: Sequence[ActionArrangement] = ()
+    ) -> str:
         declaration: list[str] = []
         for item in response.actions:
             if isinstance(item, NewAction):
@@ -1205,6 +1231,12 @@ class ModelWorld(World):
                 declaration.append(f"- 修改 {item.action_id}：{item.change}")
             else:
                 declaration.append(f"- 维持 {item.action_id}")
+        arrangement_lines = [
+            f"- {item.action_id}（{item.phase.value}）：{item.description}，"
+            f"原安排 {item.start}→{item.expected_end}ms"
+            + (f"，过程节点 {list(item.checkpoints)}" if item.checkpoints else "")
+            for item in sorted(arrangements, key=lambda item: str(item.action_id))
+        ]
         own_states = [
             f"- {action_id}（{actual.result}）：{actual.detail}"
             for action_id, actual in sorted(self._actual.items(), key=lambda kv: str(kv[0]))
@@ -1214,11 +1246,15 @@ class ModelWorld(World):
             f"你是场景 World 的客观检查者。共同世界状态版本 {self._version}。",
             f"角色 {response.role_id} 的可见场景（按可见范围过滤）：",
             self._visible_projection(response.role_id),
-            "该角色的实际行动状态：",
+            "引擎已登记安排（本角色；未实际开始也可主动维持；安排只供检查，不是事件事实或已感知内容）：",
+            *(arrangement_lines or ["- 无"]),
+            "World 实际行动状态（已提交事实）：",
             *(own_states or ["- 无"]),
             "角色的完整主动行为声明（本轮待检查）：",
             *(declaration or ["- 空集合（撤回全部主动维持）"]),
             "检查客观可执行性：含义、当前步骤边界、未确认结果依赖、客观条件与既有行动的关系。",
+            "维持已登记安排不是重新登记或重新开始：已登记等待中的行动可以维持，不因尚未出现在实际行动状态而拒绝，"
+            "仍须按可见场景检查客观条件与步骤边界。",
             "重点识别依赖未确认结果的串行链：无论是藏在一条新行动描述里，还是拆成同组多个行动，"
             "只要后一步以“前一步已成功”为前提（如“走过去并取走物品”），就应不通过并给出角色可获知的原因。",
             "“靠近到可触及位置”这类动作本身可以是一次独立的移动尝试：当前步骤的预期终点或完成条件不等于依赖后一步，"

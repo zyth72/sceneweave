@@ -49,6 +49,7 @@ from sceneweave.domain.messages import (
 )
 from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.translation import (
+    ActionArrangement,
     ActionSchedule,
     ModifiedActionSchedule,
     TranslationRequest,
@@ -191,6 +192,7 @@ class FakeSemanticWorld(World):
         self.facts: list[str] = []
         self.passive_effects: list[str] = []
         self.adjudications: list[dict[str, Any]] = []
+        self.checks: list[tuple[RoleResponse, tuple[ActionArrangement, ...]]] = []
         self.outcome_overrides: dict[ActionId, ActionOutcomeResult] = {}
         self.node_overrides: dict[tuple[ActionId, ActionNodeKind], ActionOutcomeResult] = {}
         self.passive_follow_up_delay = 500
@@ -286,7 +288,10 @@ class FakeSemanticWorld(World):
             passive_processes=tuple(self.passive_effects),
         )
 
-    async def check_response(self, candidate: RoleResponse) -> ActionCheckResult:
+    async def check_response(
+        self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+    ) -> ActionCheckResult:
+        self.checks.append((candidate, tuple(arrangements)))
         blocked = tuple(
             item.action_id
             for item in candidate.actions

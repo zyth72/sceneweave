@@ -6,7 +6,7 @@
 """
 
 import asyncio
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -32,6 +32,7 @@ from sceneweave.domain.messages import (
 )
 from sceneweave.domain.time import SimulationTime, validate_simulation_time
 from sceneweave.domain.tracing import TraceRecord, TraceValue, TurnTracer
+from sceneweave.domain.translation import ActionArrangement
 from sceneweave.roles.base import Role
 from sceneweave.world.base import World
 
@@ -121,6 +122,7 @@ class ResponseRunner:
         *,
         tracer: TurnTracer | None = None,
         max_rejections: int = 3,
+        arrangements_for: Callable[[RoleId], Sequence[ActionArrangement]] | None = None,
     ) -> None:
         self._roles: dict[RoleId, Role] = {}
         for role in roles:
@@ -136,6 +138,7 @@ class ResponseRunner:
         if max_rejections < 1:
             raise ValueError(f"打回次数上限必须是正整数，得到：{max_rejections!r}")
         self._max_rejections = max_rejections
+        self._arrangements_for = arrangements_for
         self._running = False
 
     async def run_cycle(
@@ -155,6 +158,11 @@ class ResponseRunner:
         cycle_id = first.cycle_id
         simulation_time = first.simulation_time
         base_version = self._world.state_version
+        # 周期开始时冻结每个角色的既有安排快照：本轮全部检查（含打回
+        # 重查）使用同一份只读上下文；来源仍归引擎，World 不写入。
+        arrangements_snapshot = {
+            role_id: self._freeze_arrangements(role_id) for role_id in self._roles
+        }
         used_response_ids: set[ResponseId] = set()
         self._running = True
         try:
@@ -173,6 +181,7 @@ class ResponseRunner:
                             turn_inputs[role_id],
                             base_version,
                             used_response_ids,
+                            arrangements_snapshot[role_id],
                         )
                     )
                     for role_id in self._roles
@@ -241,12 +250,22 @@ class ResponseRunner:
             raise ValueError("一轮只能处理同一剧情时刻")
         return turn_inputs
 
+    def _freeze_arrangements(self, role_id: RoleId) -> tuple[ActionArrangement, ...]:
+        """冻结本角色既有安排的只读快照；未注入来源时为空（独立声明）。"""
+        if self._arrangements_for is None:
+            return ()
+        frozen = tuple(self._arrangements_for(role_id))
+        if not all(isinstance(item, ActionArrangement) for item in frozen):
+            raise ValueError(f"角色 {role_id} 的既有安排必须是 ActionArrangement 序列")
+        return frozen
+
     async def _process_role(
         self,
         role: Role,
         turn: TurnInput,
         base_version: WorldStateVersion,
         used_response_ids: set[ResponseId],
+        arrangements: tuple[ActionArrangement, ...],
     ) -> AcceptedResponse:
         current: RoleResponse | None = None
         try:
@@ -279,9 +298,12 @@ class ResponseRunner:
             )
             rejections = 0
             while True:
-                check = await self._world.check_response(response)
+                check = await self._world.check_response(response, arrangements=arrangements)
                 self._require_valid_check(check, response, base_version)
-                details: dict[str, TraceValue] = {"passed": check.passed}
+                details: dict[str, TraceValue] = {
+                    "passed": check.passed,
+                    "arrangements": len(arrangements),
+                }
                 if check.reason:
                     details["reason"] = check.reason
                 self._trace(
