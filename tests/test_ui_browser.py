@@ -78,7 +78,8 @@ const payloads = JSON.parse(require('node:fs').readFileSync(process.argv[4], 'ut
     () => document.querySelectorAll('.cycle').length === 2 &&
           document.querySelectorAll('.call').length === 3 &&
           Array.prototype.every.call(
-            document.querySelectorAll('button'), (button) => button.disabled),
+            document.querySelectorAll('button:not(#btn-export)'),
+            (button) => button.disabled),
     null,
     { timeout: 15000 },
   );
@@ -91,7 +92,8 @@ const payloads = JSON.parse(require('node:fs').readFileSync(process.argv[4], 'ut
       errors: document.querySelectorAll('.call.error').length,
       skips: document.querySelectorAll('.call.skip').length,
       buttonsDisabled: Array.prototype.every.call(
-        document.querySelectorAll('button'), (button) => button.disabled),
+        document.querySelectorAll('button:not(#btn-export)'), (button) => button.disabled),
+      exportEnabled: !document.getElementById('btn-export').disabled,
       statusFinished: document.getElementById('status').textContent.indexOf('运行结束') >= 0,
       finalVisible: text.indexOf('停止原因：time_limit') >= 0,
       noActionVisible: text.indexOf('（无主动行为声明）') >= 0,
@@ -373,6 +375,7 @@ def test_page_dom_behavior_in_real_browser(tmp_path: Path) -> None:
         assert result["calls"] == 3, "调用/跳过/错误记录都在"
         assert result["errors"] == 1 and result["skips"] == 1
         assert result["buttonsDisabled"] is True, "完成态停用控制按钮"
+        assert result["exportEnabled"] is True, "完成态导出按钮仍可用"
         assert result["statusFinished"] is True, "陈旧 /status 不覆盖完成态"
         assert result["finalVisible"] is True
         assert result["noActionVisible"] is True, "无行动声明如实显示"
@@ -397,6 +400,371 @@ def test_page_dom_behavior_in_real_browser(tmp_path: Path) -> None:
             "finalVisible": True,
         }, "刷新后历史与最终态一致且不重复"
         assert outcome["snapshotCalls"] >= 4, "确实发生了重叠刷新"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+
+_VIEW_JS_DRIVER = r"""
+'use strict';
+const { chromium } = require(process.argv[2]);
+const fs = require('node:fs');
+const url = process.argv[3];
+const payloads = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
+
+(async () => {
+  const browser = await chromium.launch({
+    executablePath: process.argv[5],
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  });
+  const context = await browser.newContext({ acceptDownloads: true });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(String(error)));
+  let current = payloads.empty;
+  await page.route('**/run-snapshot', async (route) => {
+    await route.fulfill({ json: JSON.parse(JSON.stringify(current)) });
+  });
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForFunction(
+    () => document.querySelectorAll('.cycle').length === 2,
+    null,
+    { timeout: 15000 },
+  );
+
+  const initial = await page.evaluate(() => ({
+    cycles: document.querySelectorAll('.cycle').length,
+    completedHidden: document.getElementById('completed-section').style.display === 'none',
+    callsVisible: document.getElementById('calls-section').style.display !== 'none',
+    exportEnabled: !document.getElementById('btn-export').disabled,
+  }));
+
+  await page.selectOption('#view-mode', 'completed');
+  const emptyState = await page.evaluate(() => ({
+    rows: document.querySelectorAll('.completed-row').length,
+    completedVisible: document.getElementById('completed-section').style.display !== 'none',
+    cyclesHidden: document.getElementById('cycles-section').style.display === 'none',
+    callsHidden: document.getElementById('calls-section').style.display === 'none',
+    emptyHint: document.getElementById('completed').textContent.indexOf(
+      '暂无 World 已确认完成的行动') >= 0,
+    finalNote: document.getElementById('final-state').textContent.indexOf('运行尚未结束') >= 0,
+    timeText: document.getElementById('time').textContent,
+  }));
+
+  const [emptyDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.click('#btn-export'),
+  ]);
+  const emptyMd = fs.readFileSync(await emptyDownload.path(), 'utf8');
+  const emptyExport = {
+    filename: emptyDownload.suggestedFilename(),
+    hasEmptyNote: emptyMd.indexOf('暂无 World 已确认完成的行动') >= 0,
+    hasNoFinal: emptyMd.indexOf('运行尚未结束') >= 0,
+    hasDisclaimer: emptyMd.indexOf('不等于全局目标必然达成') >= 0,
+  };
+
+  current = payloads.full;
+  await page.evaluate(() => { window.refreshSnapshot(); });
+  await page.waitForFunction(
+    () => document.getElementById('status').textContent.indexOf('运行结束') >= 0,
+    null,
+    { timeout: 15000 },
+  );
+  const afterFull = await page.evaluate(() => {
+    const text = document.getElementById('completed').textContent;
+    return {
+      mode: document.getElementById('view-mode').value,
+      rows: document.querySelectorAll('.completed-row').length,
+      completedVisible: document.getElementById('completed-section').style.display !== 'none',
+      cyclesHidden: document.getElementById('cycles-section').style.display === 'none',
+      callsHidden: document.getElementById('calls-section').style.display === 'none',
+      hasCompleted: text.indexOf('a-1') >= 0 && text.indexOf('行动甲完成') >= 0,
+      hasFailed: text.indexOf('a-2') >= 0,
+      hasUnconfirmed: text.indexOf('a-3') >= 0,
+      hasCandidate: text.indexOf('a-candidate') >= 0,
+      countText: document.getElementById('completed-count').textContent,
+      timeText: document.getElementById('time').textContent,
+      finalVisible: document.getElementById('final-state').textContent.indexOf('time_limit') >= 0,
+      playDisabled: document.getElementById('btn-play').disabled,
+      exportEnabled: !document.getElementById('btn-export').disabled,
+      xssExecuted: typeof window.__xss !== 'undefined',
+      injectedNodes: document.querySelectorAll('#completed img, #completed script').length,
+    };
+  });
+
+  const [completedDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.click('#btn-export'),
+  ]);
+  const completedMd = fs.readFileSync(await completedDownload.path(), 'utf8');
+  const completedExport = {
+    filename: completedDownload.suggestedFilename(),
+    hasCompleted: completedMd.indexOf('a-1') >= 0 && completedMd.indexOf('行动甲完成') >= 0,
+    hasMultiline: completedMd.indexOf('\n  第二行说明') >= 0,
+    safeHtml: completedMd.indexOf('<img') < 0 && completedMd.indexOf('&lt;img') >= 0,
+    safeHeading: completedMd.includes(String.raw`\#\# 假标题`),
+    safeLink: completedMd.includes(String.raw`\[伪链接\]\(javascript:alert\(1\)\)`),
+    noFailed: completedMd.indexOf('a-2') < 0,
+    noUnconfirmed: completedMd.indexOf('a-3') < 0,
+    noCandidate: completedMd.indexOf('a-candidate') < 0,
+    hasCount: completedMd.indexOf('1 条完成结果，涉及 1 个周期') >= 0,
+    hasFinal: completedMd.indexOf(String.raw`停止原因：time\_limit`) >= 0 &&
+      completedMd.indexOf('8000 ms') >= 0,
+    hasDisclaimer: completedMd.indexOf('不等于全局目标必然达成') >= 0,
+  };
+
+  await page.selectOption('#view-mode', 'all');
+  await page.selectOption('#filter-role', 'lin');
+  const allView = await page.evaluate(() => ({
+    mode: document.getElementById('view-mode').value,
+    cyclesVisible: document.getElementById('cycles-section').style.display !== 'none',
+    callsVisible: document.getElementById('calls-section').style.display !== 'none',
+    calls: document.querySelectorAll('.call').length,
+  }));
+  const [allDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.click('#btn-export'),
+  ]);
+  const allMd = fs.readFileSync(await allDownload.path(), 'utf8');
+  const allExport = {
+    filename: allDownload.suggestedFilename(),
+    hasCycle: allMd.indexOf('## 周期 1') >= 0,
+    hasEvents: allMd.indexOf('### 同刻事件') >= 0 && allMd.indexOf('event-1') >= 0,
+    hasLinSummary: allMd.indexOf('林舟摘要') >= 0,
+    filteredShen: allMd.indexOf('沈言摘要') < 0,
+    noRawPrompt: allMd.indexOf('SECRET_PROMPT_LIN') < 0 &&
+      allMd.indexOf('SECRET_PROMPT_WORLD') < 0,
+    hasCallsSection: allMd.indexOf('## 模型调用摘要') >= 0,
+  };
+
+  await page.selectOption('#filter-role', '');
+  const allCallsAfterClear = await page.evaluate(
+    () => document.querySelectorAll('.call').length);
+  await page.selectOption('#view-mode', 'completed');
+  await page.evaluate(() => { window.refreshSnapshot(); });
+  await page.waitForTimeout(150);
+  const modePersisted = await page.evaluate(() => ({
+    mode: document.getElementById('view-mode').value,
+    callsHidden: document.getElementById('calls-section').style.display === 'none',
+    rows: document.querySelectorAll('.completed-row').length,
+  }));
+
+  await browser.close();
+  console.log('RESULT ' + JSON.stringify({
+    initial, emptyState, emptyExport, afterFull, completedExport,
+    allView, allExport, allCallsAfterClear, modePersisted, pageErrors,
+  }));
+})().catch((error) => {
+  console.error('BROWSER_FAILED ' + (error && error.stack ? error.stack : error));
+  process.exit(1);
+});
+"""
+
+
+def _view_cycle(
+    step: int, cycle_id: str, time_ms: int, outcomes: list[dict[str, Any]]
+) -> dict[str, Any]:
+    cycle = _cycle(step, cycle_id, time_ms)
+    world = cycle["entity_logs"]["world"]
+    world["action_outcomes"] = outcomes
+    world["committed_facts"] = [f"周期 {step} 已提交事实"]
+    world["registry_actions"] = [
+        {
+            "action_id": f"a-{step}",
+            "role_id": "lin",
+            "phase": (
+                "completed"
+                if any(item["result"] == "completed" for item in outcomes)
+                else "started"
+            ),
+            "start_ms": time_ms,
+            "expected_end_ms": time_ms + 10,
+            "description": f"周期 {step} 行动",
+        }
+    ]
+    return cycle
+
+
+def _view_payloads() -> dict[str, Any]:
+    empty = {
+        "version": [1, 0, 0],
+        "finished": False,
+        "cycles": [
+            _view_cycle(
+                1, "cycle-1", 500, [{"action_id": "a-failed", "result": "failed", "detail": "失败"}]
+            ),
+            _view_cycle(
+                2,
+                "cycle-2",
+                900,
+                [{"action_id": "a-open", "result": "unconfirmed", "detail": "未确认"}],
+            ),
+        ],
+        "final": None,
+        "calls": [],
+    }
+    full = {
+        "version": [2, 3, 1],
+        "finished": True,
+        "cycles": [
+            _view_cycle(
+                1,
+                "cycle-1",
+                500,
+                [
+                    {
+                        "action_id": "a-1",
+                        "result": "completed",
+                        "detail": (
+                            "行动甲完成 <img src=x onerror=window.__xss=9>\n第二行说明"
+                            "\n## 假标题\n[伪链接](javascript:alert(1))"
+                        ),
+                    },
+                    {"action_id": "a-2", "result": "failed", "detail": "行动乙失败"},
+                ],
+            ),
+            _view_cycle(
+                2,
+                "cycle-2",
+                2500,
+                [{"action_id": "a-3", "result": "unconfirmed", "detail": "行动丙未确认"}],
+            ),
+        ],
+        "final": _final(),
+        "calls": [
+            _call(
+                0,
+                group="lin",
+                phase="system1",
+                summary_text="林舟摘要",
+                prompt="SECRET_PROMPT_LIN",
+                response='{"reconsider": false, "note": "x"}',
+            ),
+            _call(
+                1,
+                group="shen",
+                phase="system1",
+                summary_text="沈言摘要",
+                prompt="SECRET_PROMPT_SHEN",
+                response='{"reconsider": true, "note": "y"}',
+            ),
+            _call(
+                2,
+                group="World",
+                phase="world-adjudicate",
+                summary_text="裁决候选摘要",
+                prompt="SECRET_PROMPT_WORLD",
+                response=(
+                    '{"outcomes": [{"action_id": "a-candidate", "result": "completed",'
+                    ' "detail": "候选完成"}]}'
+                ),
+            ),
+        ],
+    }
+    return {"empty": empty, "full": full}
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None
+    or shutil.which("chromium") is None
+    or not PLAYWRIGHT_CORE
+    or not Path(PLAYWRIGHT_CORE).is_dir(),
+    reason="需要 node、chromium，以及 SCENEWEAVE_TEST_PLAYWRIGHT_CORE 指定的依赖",
+)
+def test_page_completed_view_and_markdown_export_in_real_browser(tmp_path: Path) -> None:
+    """真实 Chromium 中验证完成视图、Markdown 导出与模式稳定。"""
+    server = _PageServer(("127.0.0.1", 0), _PageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/"
+        payload_file = tmp_path / "view_payloads.json"
+        payload_file.write_text(json.dumps(_view_payloads(), ensure_ascii=False), encoding="utf-8")
+        driver = tmp_path / "view_probe.js"
+        driver.write_text(_VIEW_JS_DRIVER, encoding="utf-8")
+        completed = subprocess.run(
+            [
+                shutil.which("node") or "node",
+                str(driver),
+                PLAYWRIGHT_CORE,
+                url,
+                str(payload_file),
+                CHROMIUM,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            cwd=tmp_path,
+        )
+        assert completed.returncode == 0, (
+            f"浏览器探针失败：\nstdout={completed.stdout}\nstderr={completed.stderr}"
+        )
+        result_lines = [
+            line for line in completed.stdout.splitlines() if line.startswith("RESULT ")
+        ]
+        assert result_lines, f"浏览器探针没有输出结果：{completed.stdout}"
+        outcome = json.loads(result_lines[-1].removeprefix("RESULT "))
+        assert outcome["pageErrors"] == [], f"页面脚本异常：{outcome['pageErrors']}"
+        assert outcome["initial"] == {
+            "cycles": 2,
+            "completedHidden": True,
+            "callsVisible": True,
+            "exportEnabled": True,
+        }
+        empty = outcome["emptyState"]
+        assert empty["rows"] == 0
+        assert empty["completedVisible"] and empty["cyclesHidden"] and empty["callsHidden"]
+        assert empty["emptyHint"] and empty["finalNote"]
+        assert "已完成 2 个周期" in empty["timeText"], "顶部周期总数不因筛选改变"
+        empty_export = outcome["emptyExport"]
+        assert empty_export["filename"] == "sceneweave-completed.md"
+        assert empty_export["hasEmptyNote"]
+        assert empty_export["hasNoFinal"]
+        assert empty_export["hasDisclaimer"]
+        full = outcome["afterFull"]
+        assert full["mode"] == "completed", "新快照到达后保持所选模式"
+        assert full["rows"] == 1
+        assert full["completedVisible"] and full["cyclesHidden"] and full["callsHidden"]
+        assert full["hasCompleted"], "只显示 completed 结算"
+        assert not full["hasFailed"] and not full["hasUnconfirmed"]
+        assert not full["hasCandidate"], "模型候选里的 completed 不计入成功"
+        assert "1 条" in full["countText"] and "1 个周期" in full["countText"]
+        assert "已完成 2 个周期" in full["timeText"]
+        assert full["finalVisible"], "最终收尾状态独立保留"
+        assert full["playDisabled"] and full["exportEnabled"]
+        assert full["xssExecuted"] is False and full["injectedNodes"] == 0
+        completed_export = outcome["completedExport"]
+        assert completed_export["filename"] == "sceneweave-completed.md"
+        assert completed_export["hasCompleted"]
+        assert completed_export["hasMultiline"], "多行说明保留且不破坏结构"
+        assert completed_export["safeHtml"], "导出将 HTML 当作文字"
+        assert completed_export["safeHeading"] and completed_export["safeLink"]
+        assert completed_export["noFailed"] and completed_export["noUnconfirmed"]
+        assert completed_export["noCandidate"]
+        assert completed_export["hasCount"] and completed_export["hasFinal"]
+        assert completed_export["hasDisclaimer"]
+        all_view = outcome["allView"]
+        assert all_view == {
+            "mode": "all",
+            "cyclesVisible": True,
+            "callsVisible": True,
+            "calls": 1,
+        }
+        all_export = outcome["allExport"]
+        assert all_export["filename"] == "sceneweave-process.md"
+        assert all_export["hasCycle"] and all_export["hasEvents"]
+        assert all_export["hasLinSummary"] and all_export["filteredShen"]
+        assert all_export["noRawPrompt"], "导出省略原始 Prompt/Response"
+        assert all_export["hasCallsSection"]
+        assert outcome["allCallsAfterClear"] == 3, "清除筛选后恢复全部调用"
+        assert outcome["modePersisted"] == {
+            "mode": "completed",
+            "callsHidden": True,
+            "rows": 1,
+        }, "再次刷新快照后模式稳定"
     finally:
         server.shutdown()
         server.server_close()

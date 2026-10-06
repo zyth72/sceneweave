@@ -48,6 +48,10 @@ PAGE = """<!DOCTYPE html>
   .filters { display: flex; gap: .8rem; flex-wrap: wrap; align-items: center;
              margin-bottom: .5rem; }
   .filters label { font-size: .85rem; color: #35507a; }
+  .views { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .views label { font-size: .85rem; color: #35507a; }
+  .completed-row { border: 1px solid #e2e6ec; border-radius: 6px; margin: .5rem 0;
+                   padding: .4rem .6rem; }
   pre { white-space: pre-wrap; word-break: break-word; background: #f2f4f7;
         padding: .5rem; border-radius: 4px; max-height: 24rem; overflow: auto; }
 </style>
@@ -65,12 +69,26 @@ PAGE = """<!DOCTYPE html>
   <button id="btn-stop" type="button">停止</button>
   <span id="status" class="muted"></span>
 </p>
+<p class="views">
+  <label for="view-mode">视图</label>
+  <select id="view-mode">
+    <option value="all">全部过程</option>
+    <option value="completed">只看已完成行动</option>
+  </select>
+  <button id="btn-export" type="button">导出 Markdown</button>
+  <span id="view-note" class="muted"></span>
+</p>
 <main>
-  <section class="full">
+  <section class="full" id="cycles-section">
     <h2>运行过程（每个完整周期）</h2>
     <div id="cycles"></div>
   </section>
-  <section class="full">
+  <section class="full" id="completed-section" style="display: none">
+    <h2>World 已确认完成的行动</h2>
+    <p id="completed-count" class="muted"></p>
+    <div id="completed"></div>
+  </section>
+  <section class="full" id="calls-section">
     <h2>模型调用（含跳过 / 未调用说明）</h2>
     <div class="filters">
       <label for="filter-role">角色 / 作用域</label>
@@ -82,7 +100,7 @@ PAGE = """<!DOCTYPE html>
     <div id="calls"></div>
   </section>
   <section class="full">
-    <h2>最终收尾状态</h2>
+    <h2>最终收尾状态（独立于视图筛选）</h2>
     <div id="final-state"></div>
   </section>
 </main>
@@ -94,6 +112,9 @@ let refreshSeq = 0;
 let appliedSeq = 0;
 let callItems = [];
 let refreshTimer = null;
+let lastSnapshot = null;
+let viewMode = "all";
+const NL = String.fromCharCode(10);
 const buttons = {
   play: document.getElementById("btn-play"),
   pause: document.getElementById("btn-pause"),
@@ -196,6 +217,7 @@ function refreshSnapshot() {
 
 function applySnapshot(data) {
   lastVersion = data.version;
+  lastSnapshot = data;
   finished = data.finished === true;
   for (const key of Object.keys(buttons)) buttons[key].disabled = finished;
   if (finished) {
@@ -207,6 +229,8 @@ function applySnapshot(data) {
   renderCycles(data.cycles || []);
   renderCalls(data.calls || []);
   renderFinal(data.final || null);
+  renderCompleted(collectCompleted(data.cycles || []));
+  applyView();
 }
 
 function renderHeader(data) {
@@ -467,10 +491,277 @@ function renderFinal(finalData) {
   host.appendChild(list);
 }
 
+function collectCompleted(cycles) {
+  const rows = [];
+  const steps = new Set();
+  for (const cycle of cycles) {
+    const world = ((cycle.entity_logs || {}).world) || {};
+    const diagnostics = ((cycle.entity_logs || {}).diagnostics) || {};
+    const outcomes = Array.isArray(world.action_outcomes) ? world.action_outcomes : [];
+    for (const outcome of outcomes) {
+      if (!outcome || outcome.result !== "completed") continue;
+      rows.push({
+        step: cycle.step,
+        cycleId: diagnostics.cycle_id || null,
+        timeMs: world.simulation_time_ms,
+        actionId: outcome.action_id,
+        detail: outcome.detail,
+      });
+      steps.add(String(cycle.step));
+    }
+  }
+  return { rows: rows, cycleCount: steps.size };
+}
+
+function renderCompleted(result) {
+  const host = document.getElementById("completed");
+  const count = document.getElementById("completed-count");
+  host.replaceChildren();
+  count.textContent = result.rows.length
+    ? "已确认完成结果 " + result.rows.length + " 条，涉及 " + result.cycleCount +
+      " 个周期（顶部周期总数与真实剧情时刻不因筛选改变）。"
+    : "已确认完成结果 0 条。";
+  if (!result.rows.length) {
+    host.appendChild(element("p", "empty",
+      "暂无 World 已确认完成的行动。这里只统计已提交周期中 result=completed 的结算；" +
+      "候选模型输出、检查通过与普通调用都不会计入。"));
+    return;
+  }
+  for (const row of result.rows) {
+    const block = element("div", "completed-row");
+    block.appendChild(element("div", "call-head",
+      "周期 " + row.step + (row.cycleId ? " · " + row.cycleId : "") +
+      " · 剧情时刻 " + displayMs(row.timeMs)));
+    const list = element("ul");
+    listItem(list, row.actionId + "：" +
+      (row.detail === undefined || row.detail === null ? "（无说明）" : String(row.detail)));
+    block.appendChild(list);
+    host.appendChild(block);
+  }
+}
+
+function applyView() {
+  const completed = viewMode === "completed";
+  document.getElementById("cycles-section").style.display = completed ? "none" : "";
+  document.getElementById("calls-section").style.display = completed ? "none" : "";
+  document.getElementById("completed-section").style.display = completed ? "" : "none";
+  document.getElementById("view-note").textContent = completed
+    ? "只看 World 已提交的 result=completed 结算；最终收尾状态独立保留，与筛选无关。"
+    : "完整调试视图；最终收尾状态始终独立显示。";
+}
+
+function markdownText(value) {
+  const text = String(value === null || value === undefined ? "" : value);
+  // 动态内容作为文字导出，不能生成额外标题、链接或 HTML。
+  const normalized = text.split(String.fromCharCode(13)).join("");
+  const special = new Set([92, 96, 42, 95, 123, 125, 91, 93, 40, 41, 35, 33, 124]);
+  return normalized.split(NL).map(function (line) {
+    return Array.from(line).map(function (char, index) {
+      if (char === "&") return "&amp;";
+      if (char === "<") return "&lt;";
+      if (char === ">") return "&gt;";
+      const startMarker = (char === "-" || char === "+") && !line.slice(0, index).trim();
+      const numberMarker = char === "." && /^[ ]*[0-9]+$/.test(line.slice(0, index));
+      return special.has(char.charCodeAt(0)) || startMarker || numberMarker
+        ? String.fromCharCode(92) + char : char;
+    }).join("");
+  }).join(NL);
+}
+
+function markdownLines(value, prefix) {
+  const parts = markdownText(value).split(NL);
+  return [prefix + parts[0]].concat(parts.slice(1).map(function (line) {
+    return "  " + line;
+  })).join(NL);
+}
+
+function pushMarkdownBlock(lines, texts, emptyText) {
+  if (!texts.length) {
+    lines.push(markdownLines(emptyText, "- "));
+    return;
+  }
+  for (const text of texts) lines.push(markdownLines(text, "- "));
+}
+
+function finalStateMarkdown(finalData) {
+  const state = lastSnapshot || {};
+  if (!finalData) {
+    return [state.finished === true
+      ? "运行已结束，但没有收尾步数据。"
+      : "运行尚未结束；本导出只包含当前已确认内容。"];
+  }
+  const world = ((finalData.entity_logs || {}).world) || {};
+  const diagnostics = ((finalData.entity_logs || {}).diagnostics) || {};
+  const out = [
+    "停止原因：" + (diagnostics.stop_reason || "—"),
+    "完成周期：" +
+      (diagnostics.completed_cycles === undefined ? "—" : diagnostics.completed_cycles),
+    "最终剧情时刻：" + displayMs(world.simulation_time_ms),
+  ];
+  if (finalData.action) out.push("收尾说明：" + finalData.action);
+  if (diagnostics.error) out.push("错误：" + diagnostics.error);
+  return out;
+}
+
+function buildCompletedMarkdown() {
+  const result = collectCompleted((lastSnapshot || {}).cycles || []);
+  const lines = [
+    "# sceneweave 已确认完成行动",
+    "",
+    "> 范围：仅包含已提交周期中 World 结算 result=completed 的行动；失败、未确认或混合周期" +
+      "不会整体标为成功，候选模型输出、检查通过与普通模型调用不计入。",
+    "> completed 表示该行动完成，不等于全局目标必然达成。",
+    "",
+    "共 " + result.rows.length + " 条完成结果，涉及 " + result.cycleCount + " 个周期。",
+    "",
+    "## 完成行动",
+    "",
+  ];
+  if (!result.rows.length) {
+    lines.push("暂无 World 已确认完成的行动。");
+  }
+  for (const row of result.rows) {
+    lines.push(markdownLines(
+      "周期 " + row.step + (row.cycleId ? "（" + row.cycleId + "）" : "") +
+      " · " + displayMs(row.timeMs) + " · " + row.actionId + "：" +
+      (row.detail === undefined || row.detail === null ? "（无说明）" : row.detail),
+      "- "));
+  }
+  lines.push("", "## 最终状态", "");
+  for (const line of finalStateMarkdown((lastSnapshot || {}).final)) {
+    lines.push(markdownLines(line, "- "));
+  }
+  return lines.join(NL) + NL;
+}
+
+function buildProcessMarkdown() {
+  const snapshot = lastSnapshot || {};
+  const cycles = snapshot.cycles || [];
+  const lines = [
+    "# sceneweave 运行过程导出",
+    "",
+    "> 范围：全部已完成周期的事件、角色完整主动声明、登记行动与 World 已提交事实/结算；" +
+      "模型调用摘要按当前角色/阶段筛选，省略原始 Prompt/Response 原文。",
+    "",
+  ];
+  if (!cycles.length) {
+    lines.push("尚未完成任何周期。", "");
+  }
+  for (const cycle of cycles) {
+    const logs = cycle.entity_logs || {};
+    const world = logs.world || {};
+    const diagnostics = logs.diagnostics || {};
+    lines.push("## 周期 " + cycle.step +
+      (diagnostics.cycle_id ? "（" + markdownText(diagnostics.cycle_id) + "）" : "") +
+      " · " + displayMs(world.simulation_time_ms), "");
+    lines.push("### 同刻事件");
+    pushMarkdownBlock(lines, (world.events || []).map(function (event) {
+      return "[" + event.kind + "] " + event.event_id + "：" + event.description;
+    }), "本轮无同刻事件。");
+    lines.push("", "### 角色主动声明与可见状态");
+    const entityActions = cycle.entity_actions || {};
+    const roleKeys = Object.keys(entityActions);
+    if (!roleKeys.length) lines.push("- 本周期没有角色声明记录。");
+    for (const key of roleKeys) {
+      const roleLog = logs[key] || {};
+      lines.push("", "#### 角色 " + markdownText(roleLog.role_id || key));
+      pushMarkdownBlock(lines, ["主动声明：" + entityActions[key]], "（无主动行为声明）");
+      pushMarkdownBlock(lines, (roleLog.action_states || []).map(function (state) {
+        return "[" + state.phase + "] " + state.action_id + " — " + state.detail;
+      }), "本轮无自身行动状态。");
+      pushMarkdownBlock(lines, (roleLog.perceptions || []).map(function (text) {
+        return "感知：" + text;
+      }), "本轮无可用感知。");
+    }
+    lines.push("", "### 统一登记后的行动记录");
+    pushMarkdownBlock(lines, (world.registry_actions || []).map(function (record) {
+      return "[" + record.phase + "] " + record.action_id + "（" + record.role_id + "，" +
+        record.start_ms + "→" + record.expected_end_ms + "ms）" + record.description;
+    }), "暂无登记行动。");
+    lines.push("", "### World 实际行动与被动过程");
+    const diagnosticTexts = [];
+    const diagnostic = world.world_diagnostic;
+    if (diagnostic) {
+      for (const state of diagnostic.action_states || []) {
+        diagnosticTexts.push("[实际 " + state.state + "] " + state.action_id +
+          "（" + state.role_id + "）" + state.detail);
+      }
+      for (const passive of diagnostic.passive_processes || []) {
+        diagnosticTexts.push("[被动] " + passive);
+      }
+    }
+    pushMarkdownBlock(lines, diagnosticTexts, "暂无实际行动与被动过程。");
+    lines.push("", "### 事实增量与结算结果");
+    const outcomeTexts = (world.action_outcomes || []).map(function (outcome) {
+      return "结算：" + outcome.action_id + " → " + outcome.result +
+        "（" + outcome.detail + "）";
+    });
+    pushMarkdownBlock(lines, (world.committed_facts || []).concat(outcomeTexts),
+      "暂无事实增量与结算结果。");
+    lines.push("", "### 诊断：行动变化原因");
+    const changes = diagnostics.change_reasons || {};
+    pushMarkdownBlock(lines, Object.keys(changes).map(function (key) {
+      return key + "：" + changes[key];
+    }), "本周期无行动变化诊断。");
+    lines.push("");
+  }
+  const role = document.getElementById("filter-role").value;
+  const phase = document.getElementById("filter-phase").value;
+  const filtered = callItems.filter(function (item) {
+    if (role && item.group !== role) return false;
+    if (phase && item.phase !== phase) return false;
+    return true;
+  });
+  lines.push("## 模型调用摘要（当前筛选：角色/作用域 " + markdownText(role || "全部") +
+    "；阶段 " + markdownText(phase || "全部") + "）", "");
+  if (!filtered.length) {
+    lines.push(callItems.length ? "当前筛选下没有模型调用记录。" : "暂无模型调用记录。");
+  }
+  for (const item of filtered) {
+    const label = item.kind === "call"
+      ? "模型调用"
+      : (item.is_skip ? "未调用（跳过）" : "阶段错误");
+    lines.push(markdownLines(label + " · " + item.phase + " · " + (item.group || "—") +
+      " · " + (typeof item.simulation_time_ms === "number"
+        ? item.simulation_time_ms + " ms" : "—") + "：" + (item.summary_text || ""), "- "));
+  }
+  lines.push("", "## 最终状态", "");
+  for (const line of finalStateMarkdown(snapshot.final)) {
+    lines.push(markdownLines(line, "- "));
+  }
+  return lines.join(NL) + NL;
+}
+
+function buildExportMarkdown() {
+  return viewMode === "completed" ? buildCompletedMarkdown() : buildProcessMarkdown();
+}
+
+function downloadMarkdown(text, filename) {
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+}
+
+function exportMarkdown() {
+  downloadMarkdown(buildExportMarkdown(), "sceneweave-" +
+    (viewMode === "completed" ? "completed" : "process") + ".md");
+}
+
 document.getElementById("btn-play").addEventListener("click", function () { postCommand("/play"); });
 document.getElementById("btn-pause").addEventListener("click", function () { postCommand("/pause"); });
 document.getElementById("btn-step").addEventListener("click", function () { postCommand("/step"); });
 document.getElementById("btn-stop").addEventListener("click", function () { postCommand("/stop"); });
+document.getElementById("btn-export").addEventListener("click", exportMarkdown);
+document.getElementById("view-mode").addEventListener("change", function (event) {
+  viewMode = event.target.value;
+  applyView();
+});
 document.getElementById("filter-role").addEventListener("change", applyCallFilters);
 document.getElementById("filter-phase").addEventListener("change", applyCallFilters);
 
