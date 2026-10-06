@@ -1273,6 +1273,10 @@ class ModelWorld(World):
             describe_scene(self._scene),
             "要求：位置变化按流逝毫秒与速度方向计算；没有实际变化就不要输出移动；"
             "这是实际进展，不是登记安排或预期结果，不提前宣称完成。",
+            "updated_action_ids 只列确有进展且仍在进行中的行动身份；已结束、未登记或本轮无实际进展的行动不要列出，"
+            "没有变化就留空；action_progress 只更新 started/in_progress/unconfirmed 的行动，不改变行动阶段。",
+            "passive_updates 只能更新上方已存在的被动过程，不在此处新增身份（新增被动影响只在联合裁决的 passives 中登记）；"
+            "done=true 表示该被动过程结束并必须说明原因，省略 done 不等于删除。",
             "只输出一个 JSON 对象，格式：",
             PROGRESS_SCHEMA,
         ]
@@ -1332,7 +1336,8 @@ class ModelWorld(World):
             *(allowed_lines or ["- 无"]),
             "要求：",
             "- 联合考虑相互作用，不按插入顺序制造优先级；同刻两人争取同一对象只给一份归属；",
-            "- start 节点也可能失败或未确认；到 end 不保证成功；完成/失败/未确认保持区分；",
+            "- 每个 start/checkpoint/end 节点都必须给出对应 outcome；start 也可能失败或未确认，"
+            "到 end 不保证成功，完成/失败/未确认保持区分；",
             "- 只有 withdrawn 或明确修改时，不标成 failed 或 completed；同一身份兼有其它节点时，"
             "以本轮对应的允许集合为准。withdrawn 可以不提供 outcome——不再主动维持本身不等于动作失败"
             "或完成，已发生效果与客观被动过程仍归 World；",
@@ -1347,7 +1352,11 @@ class ModelWorld(World):
                     | {str(m.action_id) for m in modifications}
                 )
             ),
-            "- 撤回主动控制只撤主动：历史与被动惯性等仍归 World（用 passives 表达）；",
+            "- 撤回主动控制只撤主动：撤回后仍客观持续的惯性、外力等影响才归 World（用 passives 表达）；",
+            "- passives 只登记本轮新出现的被动影响；已有被动影响未结束会持续保留，不要在后续裁决中重复声明同一身份"
+            "（重复会被拒绝）；其进展在进展更新的 passive_updates 中维护，结束用 stop_passives 引用已存在的身份；",
+            "- 角色主动持握、守护或控制物品仍属主动行动，由该行动的维持与结算表达；不能把主动维持或物品静态状态创建成"
+            "被动过程，也不要因为动作到 end 就把已确认仍在主动维持的行为改写成被动；",
             "- passives 是纯描述时只给 id 与 description；只有确实存在被动物理运动时才给 object_id、speed、direction，"
             "且三项必须成组同时出现；不能仅因对象归属未知就虚构一个物理被动过程，未确认归属用 outcomes 与事实表达即可；",
             "- stop_movements 的引用必须来自本轮参与行动或确有进行中运动的行动；只有建立了实际运动才有可停止的运动；"
