@@ -55,7 +55,8 @@ src/sceneweave/
 │   ├── runner.py                 # headless 运行、输出管理、录制/重放
 │   ├── recording.py              # 录放清单、输入绑定与全部作用域消费校验
 │   ├── ui.py                     # 真实 UI 生命周期、周期广播与录放
-│   └── page.py                   # UI 页面资源（textContent 渲染）
+│   ├── ui_snapshot.py            # UI 只读历史/模型调用快照与固定端点
+│   └── page.py                   # UI 页面资源（textContent 渲染、历史视图）
 ├── __main__.py                   # CLI 统一入口
 └── integrations/concordia/
     ├── entity.py                 # 框架实体接入
@@ -158,7 +159,19 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
 
 ## UI 运行
 
-统一入口 `--ui [PORT]` 启动真实 Concordia `SimulationServer` + `StepControllerGate`：初始暂停在首次事件前（无模型调用），单步完成一个完整事件周期，play 连续运行、pause/stop 如实生效；每个已完成周期广播一次真实 `StepData`（同刻事件、各角色完整声明与可见感知、World 事实与结算、诊断），运行结束广播真实最终状态（最终时刻/停止原因/错误/世界版本），页面保留至回车/EOF/Ctrl+C 后关闭服务器与线程。端口 0 时实际地址在启动后打印。合法角色身份若与界面保留键冲突，则使用唯一呈现别名并保留原始 `role_id`，避免覆盖 World 事实或诊断。`SimulationServer` 按框架默认绑定全部网络接口，请在可信环境运行，不要公开部署。
+统一入口 `--ui [PORT]` 启动真实 Concordia `SimulationServer` + `StepControllerGate`：初始暂停在首次事件前（无模型调用），单步完成一个完整事件周期，play 连续运行、pause/stop 如实生效；每个已完成周期广播一次真实 `StepData`（同刻事件、各角色完整声明与可见感知、World 事实与结算、诊断），运行结束广播真实最终状态（最终时刻/停止原因/错误/世界版本），页面保留至回车/EOF/Ctrl+C 后关闭服务器与线程。端口 0 时实际地址在启动后打印。合法角色身份若与界面保留键冲突，则使用唯一呈现别名并保留原始 `role_id`，避免覆盖 World 事实或诊断。
+
+页面（`app/page.py`）不直接拼接 SSE 帧，而是通过固定只读端点 `GET /run-snapshot` 读取完整本次运行数据；SSE 与 1.5 秒轮询只用于触发重新拉取。因此实时运行、刷新页面、SSE 重连和运行结束后首次打开看到的是同一份完整历史，不会重复周期或丢失历史：
+
+- **运行过程**：按时间顺序保留每个已完成事件周期的真实 `StepData`——同刻全部事件（含行动节点身份与内容）、各角色完整主动声明、可见感知与自身行动状态、统一登记后的行动记录、World 实际行动与被动过程的客观诊断、事实增量与结算结果、行动变化原因。最新周期默认展开，其余可折叠。
+- **模型调用**：同一 `SimulationLog` 中的真实组件调用（System1/2/3、翻译器、World 检查/进展/裁决）以及跳过与阶段错误记录，显示作用域/角色、阶段、周期身份与剧情毫秒，可按角色/作用域与阶段筛选；默认显示从真实回答字段提炼的短摘要（System1 的 `reconsider`/`note`、System2 的 `intention`、World 检查的 `passed`/`reason`、System3/翻译器的安排计数、进展/裁决计数等），缺字段、非 JSON 或调用失败均有如实说明，不伪造发生过的内容。点击展开查看完整 Prompt/Response/Error 原文；内容引用在服务端解开，浏览器不会看到 `_ref` 哈希。
+- **最终收尾状态**：真实停止原因、完成周期数、最终剧情时刻与错误，与周期历史分开呈现；完成信号到达后控制按钮停用，陈旧 `/status` 响应或晚到的旧快照不会覆盖完成态。
+
+页面所有动态文本（模型回答、角色声明、事件描述等）都经 `textContent`/安全 DOM 构建，恶意内容不会被当作 HTML 或脚本执行。快照只在服务器进程内存中存在，服务器关闭即消失（CLI 会在运行结束后等待回车期间保持可查看）；需要长期离线查看时使用输出目录的 `simulation_log.json`。快照端点不接受参数、路径或查询条件，只读同一 `SimulationLog` 与已广播历史，不读取环境变量、密钥或磁盘文件。
+
+`app/ui_snapshot.py` 的 `SnapshotSimulationServer` 是 `SimulationServer` 的轻量子类：继承全部原有控制/状态/SSE 行为，仅捕获已广播步数据并新增该固定端点；不修改 site-packages，也不改变调度与模型流程。
+
+可选的真实浏览器测试 `tests/test_ui_browser.py` 需要本机 Node、Chromium，以及环境变量 `SCENEWEAVE_TEST_PLAYWRIGHT_CORE` 指向已安装的 `playwright-core` 目录；依赖缺失时明确跳过，其余 HTTP/历史/日志测试照常运行。
 
 ## 演示运行
 
@@ -176,7 +189,7 @@ uv run --locked python examples/ui_demo.py [端口]
 
 [模型 World 演示](examples/model_world_demo.py) 展示场景卡加载 + ModelWorld + ModelRole + ModelTranslator + Scheduler 的完整生产链路（内联场景数据、脚本假模型、日志导出）：`uv run --locked python examples/model_world_demo.py`。
 
-UI 页面经 SSE 接收真实 `StepData`，按钮驱动真实 `StepController` 的运行、暂停、单步与停止；页面渲染真实停止原因与错误，回车退出或 Ctrl+C 中止都会清理服务器与控制器。`SimulationServer` 按框架默认绑定全部网络接口，请在可信环境运行，不要公开部署。
+示例 `ui_demo.py` 使用自带的精简页面（只显示最新步数据），与统一入口 `--ui` 的完整历史/模型调用视图相互独立；两者都由真实 `StepController` 驱动运行、暂停、单步与停止，回车退出或 Ctrl+C 中止都会清理服务器与控制器。`SimulationServer` 按框架默认绑定全部网络接口，请在可信环境运行，不要公开部署。
 
 ## 当前实现范围
 
@@ -192,4 +205,4 @@ Concordia 接入：结构化/组件日志见 `integrations/concordia/tracing.py`
 
 模型驱动的 System1/2/3 已由 `ModelRole` 与 `roles/components/` 落实：组件经可注入的 `TextSampler` 协议调用模型，`integrations/concordia/sampling.py` 提供真实 Concordia `LanguageModel` 的异步桥（采样经真实 `ComponentWithLogging` 组件把原始输入/输出写入 `SimulationLog`；`channel_for` 按阶段建立通道，datum 标记实际阶段），以及按作用域（角色）隔离的录制/重放：跨角色并行采样的完成顺序不确定，共享单个录制文件无法重放，`RecordingDirectory`/`ReplayDirectory` 为每个角色生成独立文件即可确定性重放整个多角色运行；录制包含失败调用（重放重现原错误身份），请求逐条严格匹配、错配不消费记录。注意：线程中的同步模型调用无法被硬取消——取消/超时只放弃等待，底层调用会继续到自然返回。阶段记录（提示、原始输出、解析结果、跳过/重试/错误与周期/角色/响应/行动/剧情时间身份）写入与调度器相同的因果链，追踪器自身失败不掩盖模型/解析异常。每个阶段（含跳过）都有测试与端到端集成（ModelRole + 假 World/Translator + Scheduler + 结构化日志 + StepData，含双角色并行录制重放回归）。生产语义的具体提示工程与真实模型参数调优未在本批验证（测试与演示使用脚本假模型）。
 
-尚未实现：场景自然结束条件的场景侧定义（`should_end` 可由装配注入，具体场景规则需自行提供，时限不是自然结束）；内置 Chat Completions 工厂已提供，并以真实 openai SDK 连本地假 HTTP 端点覆盖协议参数、错误/超时/重定向、组件日志与录制重放；DeepSeek 真实小场景已验证连通，复杂互动效果、提示工程与模型参数调优仍待验证（不声称速度或费用）。统一入口 `--ui` 已接入真实 `SimulationServer`/`StepControllerGate`/周期与最终广播；组件日志通道由运行编排统一注入（含录制/重放模式）。其余缺口以可注入接口承接，示例中的脚本实现明确标注为演示用假件（脚本世界裁决的内置逻辑仅为演示行走语义，不是通用 World 物理；显式提供的 World 组件脚本优先执行，耗尽直接报错）。
+尚未实现：场景自然结束条件的场景侧定义（`should_end` 可由装配注入，具体场景规则需自行提供，时限不是自然结束）；内置 Chat Completions 工厂已提供，并以真实 openai SDK 连本地假 HTTP 端点覆盖协议参数、错误/超时/重定向、组件日志与录制重放；DeepSeek 真实小场景已验证连通，复杂互动效果、提示工程与模型参数调优仍待验证（不声称速度或费用）。统一入口 `--ui` 已接入真实 `SimulationServer`/`StepControllerGate`/周期与最终广播，并新增完整历史与模型调用视图（`app/ui_snapshot.py`、`app/page.py`，`tests/test_ui_snapshot.py`、`tests/test_ui_browser.py` 覆盖）；组件日志通道由运行编排统一注入（含录制/重放模式）。其余缺口以可注入接口承接，示例中的脚本实现明确标注为演示用假件（脚本世界裁决的内置逻辑仅为演示行走语义，不是通用 World 物理；显式提供的 World 组件脚本优先执行，耗尽直接报错）。

@@ -4,10 +4,12 @@
 play 连续运行；stop/取消如实中止。每个已完成周期经 broadcast_report
 广播一次（下一周期边界等待许可前），运行结束由 broadcast_final 广播
 真实最终状态（最终时刻/错误/停止原因/版本），不复播旧周期、不重复
-广播完成。运行结束后页面保留到回车/EOF/Ctrl+C；programmatic 调用用
-wait_after_finish=False。所有资源（服务器/门/装配）都在 try/finally
-清理；Concordia 的 stop() 只 shutdown 不 server_close，这里补上 socket
-关闭与线程收尾，且未成功 start 的服务器不做 shutdown（会永久阻塞）。
+广播完成。广播同时被 SnapshotSimulationServer 捕获为只读历史，页面
+经 /run-snapshot 查看完整本次运行与解引用的模型输入输出。运行结束后
+页面保留到回车/EOF/Ctrl+C；programmatic 调用用 wait_after_finish=False。
+所有资源（服务器/门/装配）都在 try/finally 清理；Concordia 的 stop()
+只 shutdown 不 server_close，这里补上 socket 关闭与线程收尾，且未成功
+start 的服务器不做 shutdown（会永久阻塞）。
 """
 
 import asyncio
@@ -32,6 +34,7 @@ from sceneweave.app.runner import (
     _safe_export,
     bind_component_channels,
 )
+from sceneweave.app.ui_snapshot import RunSnapshotHistory, SnapshotSimulationServer
 from sceneweave.config.loader import AssemblyConfig
 from sceneweave.engine.control import RunStatus
 from sceneweave.engine.report import CycleReport
@@ -58,7 +61,7 @@ def _validate_port(port: int) -> int:
 
 
 class _ManagedServer:
-    """包装 SimulationServer：暴露实际端口与可靠的资源关闭。
+    """包装 SnapshotSimulationServer：暴露实际端口与可靠的资源关闭。
 
     端口传 0 时由系统分配，绑定后从 socket 读实际端口。Concordia 的
     stop() 只调 shutdown() 并把内部引用置空；这里先取引用再停止，
@@ -66,8 +69,20 @@ class _ManagedServer:
     （SSE 连接可能长期占用），未成功 start 的实例只释放控制器。
     """
 
-    def __init__(self, html: str, port: int) -> None:
-        self._server = SimulationServer(port=port, html_content=html)
+    def __init__(
+        self,
+        html: str,
+        port: int,
+        *,
+        history: RunSnapshotHistory,
+        log_provider: Callable[[], Any],
+    ) -> None:
+        self._server = SnapshotSimulationServer(
+            port=port,
+            html_content=html,
+            history=history,
+            log_provider=log_provider,
+        )
         self._actual_port: int | None = None
         self._started = False
 
@@ -174,8 +189,14 @@ async def run_ui(
     if record_directory is not None and replay_run is not None:
         raise UIRunnerError("录制与重放互斥")
     tracer = _RunTracer()
+    history = RunSnapshotHistory()
     out_dir = _prepare_directories(output_directory, record_directory)
-    managed = _ManagedServer(PAGE, port)
+    managed = _ManagedServer(
+        PAGE,
+        port,
+        history=history,
+        log_provider=lambda: tracer.log,
+    )
     assembly: Assembly | None = None
     gate: _BroadcastingGate | None = None
     recorder: RecordingDirectory | None = None
