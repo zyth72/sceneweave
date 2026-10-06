@@ -165,7 +165,7 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
 
 模型提示保持既有 schema 与严格校验：System1 区分维持已登记行动与启动新行为；System3 只提交当前可独立结算的步骤，同一身份在 maintain/modify 中只能出现一次，仅撤回维持时从完整集合中省略。System2 的 `abandon` 只能使用实际列出的可维持行动身份。World 检查区分独立移动尝试与依赖前一步实际结果的后续动作；翻译器只设置必要过程节点，且节点严格位于开始与结束之间。
 
-结算结果与节点类型的允许规则归口在 `domain/adjudication.py`，引擎提交前校验与 World 提示共用同一映射。仅修改或撤回时不得标成 failed/completed；同身份兼有其它节点时以合并的允许集合为准。撤回可不提供 outcome，环境事件只写事实变化，`follow_ups` 只登记独立环境过程，不重复安排已登记行动的节点。
+结算结果与节点类型的允许规则归口在 `domain/adjudication.py`，引擎提交前校验与 World 提示共用同一映射。仅修改或撤回时不得标成 failed/completed；同身份兼有其它节点时以合并的允许集合为准。撤回可不提供 outcome，环境事件只写事实变化，`follow_ups` 只登记独立环境过程，不重复安排已登记行动的节点。`passives` 有两种形态：纯描述只给 `id` 与 `description`；确实存在被动物理运动时才给 `object_id`/`speed`/`direction`，且三项必须成组同时出现，部分给法在解析时明确报错、不静默忽略。对象归属未确认只通过 `outcomes` 与事实表达，不虚构物理被动过程；`stop_movements` 的引用必须来自本轮参与行动或确有进行中运动的行动，本轮 outcome 为 unconfirmed 的行动不得列入，未确认结果不得隐式停止已知运动。
 
 真实 DeepSeek Flash 的 3 秒短运行已正常完成 3 个周期，两名角色均开始取文件；到时限时文件仍在书桌，尚未确定归属。录制离线回放与原概要一致，网页的周期历史、角色/阶段筛选、完整模型输入输出和刷新恢复均已验证。下方默认配置保留 12 秒时限；完整 12 秒运行尚未验证通过。示例命令按 [DeepSeek 思考模式说明](https://api-docs.deepseek.com/guides/thinking_mode/) 使用低强度思考和 16000 tokens 输出预算；上述短运行使用关闭思考的 JSON 输出模式，实际行为以各次记录为准。
 

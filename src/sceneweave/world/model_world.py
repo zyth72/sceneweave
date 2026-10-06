@@ -113,9 +113,10 @@ ADJUDICATE_SCHEMA = (
     ' "movements": [{"action_id": "参与行动身份", "role_id": "执行角色",'
     ' "speed": 非负数米每秒, "direction": [dx, dy]（非零，将归一化）}],'
     ' "stop_movements": ["结束运动的行动身份", ...],'
-    ' "passives": [{"id": "被动过程身份", "description": "被动影响描述",'
-    ' "object_id": "被推动对象（可选）", "speed": 米每秒（可选）,'
-    ' "direction": [dx, dy]（可选）}],'
+    ' "passives": [{"id": "被动过程身份", "description": "被动影响描述"}]'
+    ' 或 [{"id": "被动过程身份", "description": "被动影响描述",'
+    ' "object_id": "被推动对象", "speed": 米每秒, "direction": [dx, dy]}]'
+    "（object_id/speed/direction 三项必须成组同时出现）,"
     ' "stop_passives": ["结束的被动过程身份", ...]}——七个字段全部必填'
 )
 
@@ -1347,6 +1348,10 @@ class ModelWorld(World):
                 )
             ),
             "- 撤回主动控制只撤主动：历史与被动惯性等仍归 World（用 passives 表达）；",
+            "- passives 是纯描述时只给 id 与 description；只有确实存在被动物理运动时才给 object_id、speed、direction，"
+            "且三项必须成组同时出现；不能仅因对象归属未知就虚构一个物理被动过程，未确认归属用 outcomes 与事实表达即可；",
+            "- stop_movements 的引用必须来自本轮参与行动或确有进行中运动的行动；只有建立了实际运动才有可停止的运动；"
+            "本轮 outcome 为 unconfirmed 的行动不得列入 stop_movements——未确认结果不得隐式停止已知运动；",
             "- 开始/修改运动用 movements 建立实际速度方向；结束/撤回用 stop_movements；",
             "- 后续世界事件必须晚于当前剧情时刻（整数毫秒）。",
             "只输出一个 JSON 对象，格式：",
@@ -1664,8 +1669,14 @@ class ModelWorld(World):
             description = item.get("description")
             if not isinstance(description, str) or not description:
                 raise ModelWorldError("passives 项 description 必须是非空字符串")
-            passives.append((passive_id, description))
-            if "object_id" in item or "speed" in item:
+            # 被动运动三字段必须成组出现；direction-only 等部分给法不能被静默忽略。
+            movement_fields = {"object_id", "speed", "direction"}
+            present = movement_fields & set(item)
+            if present and present != movement_fields:
+                missing = sorted(movement_fields - present)
+                raise ModelWorldError(f"passives 运动字段必须成组出现，缺少：{missing}")
+            passive_movement: tuple[str, float, tuple[float, float]] | None = None
+            if present:
                 mover = item.get("object_id")
                 if not isinstance(mover, str) or not mover:
                     raise ModelWorldError("被动运动的 object_id 必须是非空字符串")
@@ -1673,7 +1684,10 @@ class ModelWorld(World):
                 direction = _normalize_direction(
                     _require_xy(item.get("direction"), "passives.direction")
                 )
-                passive_movements.append((passive_id, mover, speed, direction))
+                passive_movement = (mover, speed, direction)
+            passives.append((passive_id, description))
+            if passive_movement is not None:
+                passive_movements.append((passive_id, *passive_movement))
         stop_passives: list[str] = []
         for item in data["stop_passives"]:
             if not isinstance(item, str) or not item:

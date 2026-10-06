@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import itertools
 import json
 import re
 
@@ -1598,6 +1599,119 @@ def test_unknown_role_visibility_and_context_rejected() -> None:
 
 
 # ---- 被动运动元数据回归 ----
+
+
+def _adjudicate_raw(passives: list[dict]) -> str:
+    """构造一份只含 passives 的合法裁决输出。"""
+    return json.dumps(
+        {
+            "changes": [],
+            "outcomes": [],
+            "follow_ups": [],
+            "movements": [],
+            "stop_movements": [],
+            "passives": passives,
+            "stop_passives": [],
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_passives_description_only_and_full_movement_are_accepted() -> None:
+    """纯描述 id+description 与完整 object_id+speed+direction 两形态都合法。"""
+
+    async def scenario() -> None:
+        pure_world = ModelWorld(
+            scene=load_scene_card(study_card()),
+            sampler_for_scope=lambda scope: ScriptedSampler(
+                {
+                    "world-adjudicate": [
+                        _adjudicate_raw([{"id": "soreness", "description": "碰撞后手臂酸痛"}])
+                    ]
+                }
+            ),
+        )
+        candidate = await pure_world.adjudicate(
+            CycleId("c"),
+            SimulationTime(0),
+            event_ids=(EventId("e"),),
+            events=(WorldEvent(EventId("e"), SimulationTime(0), "事件"),),
+        )
+        assert pure_world.state_version == WorldStateVersion(0), "裁决候选零副作用"
+        pure_world.commit_adjudication(candidate)
+        assert pure_world.diagnostic_snapshot().passive_processes == ("soreness：碰撞后手臂酸痛",)
+        assert pure_world._passive_movements == {}  # noqa: SLF001
+
+        moving_world = ModelWorld(
+            scene=load_scene_card(study_card()),
+            sampler_for_scope=lambda scope: ScriptedSampler(
+                {
+                    "world-adjudicate": [
+                        _adjudicate_raw(
+                            [
+                                {
+                                    "id": "inertia",
+                                    "description": "惯性滑行",
+                                    "object_id": "lin",
+                                    "speed": 0.5,
+                                    "direction": [1, 0],
+                                }
+                            ]
+                        )
+                    ]
+                }
+            ),
+        )
+        moving_candidate = await moving_world.adjudicate(
+            CycleId("c"),
+            SimulationTime(0),
+            event_ids=(EventId("e"),),
+            events=(WorldEvent(EventId("e"), SimulationTime(0), "事件"),),
+        )
+        moving_world.commit_adjudication(moving_candidate)
+        assert moving_world._passive_movements["inertia"] == (  # noqa: SLF001
+            "lin",
+            0.5,
+            (1.0, 0.0),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_passives_partial_movement_fields_are_rejected_without_state_change() -> None:
+    """三字段任一缺失（全部 6 种组合）都明确报错，不静默忽略 direction-only。"""
+
+    async def scenario() -> None:
+        fields: dict[str, object] = {"object_id": "lin", "speed": 0.5, "direction": [1, 0]}
+        partials = [
+            {key: fields[key] for key in combo}
+            for size in (1, 2)
+            for combo in itertools.combinations(fields, size)
+        ]
+        assert len(partials) == 6, "覆盖全部非空真子集"
+        for partial in partials:
+            world = ModelWorld(
+                scene=load_scene_card(study_card()),
+                sampler_for_scope=lambda scope, partial=partial: ScriptedSampler(
+                    {
+                        "world-adjudicate": [
+                            _adjudicate_raw([{"id": "p1", "description": "运动", **partial}])
+                        ]
+                    }
+                ),
+            )
+            with pytest.raises(ModelWorldError, match="运动字段必须成组出现"):
+                await world.adjudicate(
+                    CycleId("c"),
+                    SimulationTime(0),
+                    event_ids=(EventId("e"),),
+                    events=(WorldEvent(EventId("e"), SimulationTime(0), "事件"),),
+                )
+            diagnostic = world.diagnostic_snapshot()
+            assert diagnostic.world_state_version == WorldStateVersion(0), "异常不改共同版本"
+            assert diagnostic.passive_processes == (), "异常不提交被动状态"
+
+    asyncio.run(scenario())
 
 
 def test_passive_movement_metadata_committed_and_used_in_prompt() -> None:
