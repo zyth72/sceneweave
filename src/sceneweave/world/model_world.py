@@ -87,9 +87,7 @@ from sceneweave.world.scene import (
     validate_scene_tree,
 )
 
-CHECK_SCHEMA = (
-    '{"passed": true/false, "reason": "不通过时的原因", "action_ids": ["有关行动身份", ...]}'
-)
+CHECK_SCHEMA = '{"passed": true/false, "reason": "不通过时的原因", "action_ids": ["本轮声明中的行动身份", ...]}'
 PROGRESS_SCHEMA = (
     '{"movements": [{"object_id": "对象", "position": [x, y]}, ...],'
     ' "updated_action_ids": ["有实际进展的行动身份", ...],'
@@ -1231,6 +1229,7 @@ class ModelWorld(World):
                 declaration.append(f"- 修改 {item.action_id}：{item.change}")
             else:
                 declaration.append(f"- 维持 {item.action_id}")
+        declared_ids = [str(item.action_id) for item in response.actions]
         arrangement_lines = [
             f"- {item.action_id}（{item.phase.value}）：{item.description}，"
             f"原安排 {item.start}→{item.expected_end}ms"
@@ -1252,6 +1251,11 @@ class ModelWorld(World):
             *(own_states or ["- 无"]),
             "角色的完整主动行为声明（本轮待检查）：",
             *(declaration or ["- 空集合（撤回全部主动维持）"]),
+            "本轮 action_ids 允许的身份（只能从中选择，按声明顺序）：" + str(declared_ids),
+            "action_ids 只列真正受影响的声明行动身份：不得填提交组、角色、响应或事件身份，"
+            "也不得填仅存在于引擎安排而本次未声明的身份；本轮声明为空时只能是 []。",
+            "检查不通过时选择受影响的声明行动身份，不要用整个提交组身份代替行动；"
+            "无需关联任何行动时可以给空数组。",
             "检查客观可执行性：含义、当前步骤边界、未确认结果依赖、客观条件与既有行动的关系。",
             "维持已登记安排不是重新登记或重新开始：已登记等待中的行动可以维持，不因尚未出现在实际行动状态而拒绝，"
             "仍须按可见场景检查客观条件与步骤边界。",

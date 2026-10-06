@@ -163,7 +163,7 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
 
 0 秒开场事件打开书房照明，并解除文件的暂时禁取状态。World 裁决实际状态变化，经校验、提交后按可见范围投递感知；竞争动机则通过各角色私有 `background` 进入 System1/2/3。配置不会强制 System1 重新考虑，也不会直接登记角色行动。同刻争夺沿用 World 联合裁决与对象树的单一容纳关系。
 
-模型提示保持既有 schema 与严格校验：System1 区分维持已登记行动与启动新行为；System3 只提交当前可独立结算的步骤，同一身份在 maintain/modify 中只能出现一次，仅撤回维持时从完整集合中省略；retry=true 或 feasible=false 是不携带主动集合的内部反馈，不是提交空集合。System2 的 `abandon` 只能使用实际列出的可维持行动身份。World 检查输入携带本角色引擎侧已登记安排，等待中的维持不因尚无实际行动状态被拒，安排只供检查、不进入感知或事实；检查区分独立移动尝试与依赖前一步实际结果的后续动作；翻译器只设置必要过程节点，且节点严格位于开始与结束之间。
+模型提示保持既有 schema 与严格校验：System1 区分维持已登记行动与启动新行为；System3 只提交当前可独立结算的步骤，同一身份在 maintain/modify 中只能出现一次，仅撤回维持时从完整集合中省略；retry=true 或 feasible=false 是不携带主动集合的内部反馈，不是提交空集合。System2 的 `abandon` 只能使用实际列出的可维持行动身份。World 检查输入携带本角色引擎侧已登记安排，等待中的维持不因尚无实际行动状态被拒，安排只供检查、不进入感知或事实；检查提示按本轮声明列出 `action_ids` 白名单，组身份与仅存于旧安排的身份不被接受，不通过时给具体受影响行动或空数组；检查区分独立移动尝试与依赖前一步实际结果的后续动作；翻译器只设置必要过程节点，且节点严格位于开始与结束之间。
 
 结算结果与节点类型的允许规则归口在 `domain/adjudication.py`，引擎提交前校验与 World 提示共用同一映射。仅修改或撤回时不得标成 failed/completed；同身份兼有其它节点时以合并的允许集合为准。撤回可不提供 outcome，环境事件只写事实变化，`follow_ups` 只登记独立环境过程，不重复安排已登记行动的节点。`passives` 有两种形态：纯描述只给 `id` 与 `description`；确实存在被动物理运动时才给 `object_id`/`speed`/`direction`，且三项必须成组同时出现，部分给法在解析时明确报错、不静默忽略。对象归属未确认只通过 `outcomes` 与事实表达，不虚构物理被动过程；`stop_movements` 的引用必须来自本轮参与行动或确有进行中运动的行动，本轮 outcome 为 unconfirmed 的行动不得列入，未确认结果不得隐式停止已知运动。`passives` 只登记本轮新出现的被动影响，已有未结束的持续保留、重复声明会被拒绝，进展在 `passive_updates` 中维护、结束用 `stop_passives` 引用已存在身份；主动持握/守护属于主动行动，动作到 end 也不得把仍在主动维持的行为改写成被动。联合裁决提示另明确每个 start/checkpoint/end 节点都必须给出 outcome；进展提示明确 `updated_action_ids`/`action_progress` 只引用进行中行动。
 
