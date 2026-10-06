@@ -157,6 +157,29 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
 
 真实模型采样（live）与重放回放的组件日志写入同一 `SimulationLog`：每次采样以 `entry_type=component` 记录 Prompt/Response 原文与作用域、周期、剧情时刻身份（step 取自周期索引，不以墙钟冒充剧情时间）；重放不建真实模型，但每次回放的服务内容同样可查询。采样器错误日志保留原始异常，错误追踪失败作为附加说明；组件通道由运行编排注入（采样器公开 `bind_channel_for`），采样器自身不创建日志。
 
+### 秘密文件争夺场景
+
+`examples/configs/run-contest.json` 与 `scene-contest.json` 提供两人争夺同一份密封秘密文件的独立示例。林舟与沈言分别受命亲自取回文件，都希望自己保管；各自知道文件在书桌上，但不知道文件内容或对方的私有指令。两人都已在书桌前、可以伸手触及文件；角色自行决定取走、交涉、阻止或退让，不预设胜者，也不预设谁已取到文件。
+
+0 秒开场事件打开书房照明，并解除文件的暂时禁取状态。World 裁决实际状态变化，经校验、提交后按可见范围投递感知；竞争动机则通过各角色私有 `background` 进入 System1/2/3。配置不会强制 System1 重新考虑，也不会直接登记角色行动。同刻争夺沿用 World 联合裁决与对象树的单一容纳关系。
+
+模型提示沿用既有规范并做了不改变 schema、输出解析与行为代码的补强：System1 区分维持已登记行动与启动新行为；System3 只提交当前可独立结算的步骤；World 检查只把依赖前一步实际结果的后续动作视为串行链，“靠近到可触及位置”等独立移动尝试不因成功未确认被拒；System2 的 `abandon` 只能使用提示中实际列出的可维持行动身份。World 联合裁决提示也明确列出可结算的行动身份，环境事件的变化写入 `changes`，不冒充行动结果。本次演示按 [DeepSeek 思考模式说明](https://api-docs.deepseek.com/guides/thinking_mode/) 显式使用低强度思考（`reasoning_effort=low`），并将输出预算设为 16000 tokens；实际行为以运行记录为准。
+
+从项目根目录运行，使用本机 `.env` 中已配置的 `DEEPSEEK_API_KEY`：
+
+```bash
+uv run --locked python -m sceneweave examples/configs/run-contest.json \
+    --live sceneweave.integrations.concordia.chat_completions:create_model \
+    --live-options '{"base_url": "https://api.deepseek.com", "model": "deepseek-flash", "api_key_env": "DEEPSEEK_API_KEY", "timeout_seconds": 120, "max_tokens": 16000, "extra_body": {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}}' \
+    --record sceneweave-runs/contest-record \
+    --output sceneweave-runs/contest-output \
+    --ui 8080
+```
+
+打开页面后点击“运行”；录制和输出目录须尚不存在，再次运行时换目录名。内思考间隔 5 秒，最长剧情时长 12 秒；达到时限会保留未完成行动，不代表争夺已自然结束。
+
+原 `run.json` 与 `scene.json` 保留。重放会严格匹配提示原文，旧录制须使用其对应版本的代码；本次阶段提示调整后，请用新录制进行当前版本的回放。它们的开场只有静态环境描述，真实运行中没有提交事实变化；角色背景也只有人格，没有当前目标，因此该次两名角色都选择等待。
+
 ## UI 运行
 
 统一入口 `--ui [PORT]` 启动真实 Concordia `SimulationServer` + `StepControllerGate`：初始暂停在首次事件前（无模型调用），单步完成一个完整事件周期，play 连续运行、pause/stop 如实生效；每个已完成周期广播一次真实 `StepData`（同刻事件、各角色完整声明与可见感知、World 事实与结算、诊断），运行结束广播真实最终状态（最终时刻/停止原因/错误/世界版本），页面保留至回车/EOF/Ctrl+C 后关闭服务器与线程。端口 0 时实际地址在启动后打印。合法角色身份若与界面保留键冲突，则使用唯一呈现别名并保留原始 `role_id`，避免覆盖 World 事实或诊断。

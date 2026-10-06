@@ -1,0 +1,53 @@
+{
+  "id": "study",
+  "name": "书房",
+  "kind": "房间",
+  "unit": "m",
+  "size": [4, 3],
+  "state": {"lighting": "关闭"},
+  "children": [
+    {
+      "id": "lin",
+      "name": "林舟",
+      "kind": "角色",
+      "position": [2.5, 1.6],
+      "state": {"posture": "站立"},
+      "children": []
+    },
+    {
+      "id": "shen",
+      "name": "沈言",
+      "kind": "角色",
+      "position": [3.1, 1.6],
+      "state": {"posture": "站立"},
+      "children": []
+    },
+    {
+      "id": "desk",
+      "name": "书桌",
+      "kind": "家具",
+      "position": [2.8, 2.2],
+      "size": [1.2, 0.6],
+      "blocks_movement": true,
+      "children": [
+        {
+          "id": "envelope",
+          "name": "密封秘密文件",
+          "kind": "物品",
+          "position": [2.8, 1.9],
+          "state": {"sealed": true, "available": false},
+          "children": []
+        },
+        {
+          "id": "drawer",
+          "name": "抽屉",
+          "kind": "容器",
+          "state": {"open": false, "locked": false},
+          "children": [
+            {"id": "key", "name": "铜钥匙", "kind": "物品"}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "scene_path": "scene-contest.json",
+  "roles": [
+    {
+      "id": "lin",
+      "background": "林舟是一名谨慎、细致的侦探。他受命亲自取回书桌上那份密封秘密文件，并希望文件最终由他自己保管；他不会默认沈言会代他取回文件。他知道自己已经站在书桌前，伸手可以触及那份密封秘密文件；但不知道文件内容，也不知道沈言的私有指令或真实意向。"
+    },
+    {
+      "id": "shen",
+      "background": "沈言是林舟的搭档，性格开朗。他同样受命亲自取回书桌上那份密封秘密文件，并希望文件最终由他自己保管；他不会默认林舟会代他取回文件。他知道自己已经站在书桌前，伸手可以触及那份密封秘密文件；但不知道文件内容，也不知道林舟的私有指令或真实意向。"
+    }
+  ],
+  "initial_events": [
+    {
+      "id": "startup-contest",
+      "time_seconds": 0,
+      "description": "书房（study）原来的照明是关闭的。此刻环境照明被打开，这不是林舟或沈言的动作，而是环境自身的变化；同时，书桌上密封秘密文件的暂时封存被解除，文件变为可取用（不涉及文件内容）。World 请按事实结算：study 的 lighting 变为“明亮”，envelope 的 available 变为 true；不替任何角色取走文件。"
+    }
+  ],
+  "run": {
+    "introspection_interval_seconds": 5,
+    "max_simulation_duration_seconds": 12
+  }
+}
