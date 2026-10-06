@@ -167,14 +167,16 @@ def my_factory(scope: str, options: dict) -> language_model.LanguageModel:
 
 结算结果与节点类型的允许规则归口在 `domain/adjudication.py`，引擎提交前校验与 World 提示共用同一映射。仅修改或撤回时不得标成 failed/completed；同身份兼有其它节点时以合并的允许集合为准。撤回可不提供 outcome，环境事件只写事实变化，`follow_ups` 只登记独立环境过程，不重复安排已登记行动的节点。`passives` 有两种形态：纯描述只给 `id` 与 `description`；确实存在被动物理运动时才给 `object_id`/`speed`/`direction`，且三项必须成组同时出现，部分给法在解析时明确报错、不静默忽略。对象归属未确认只通过 `outcomes` 与事实表达，不虚构物理被动过程；`stop_movements` 的引用必须来自本轮参与行动或确有进行中运动的行动，本轮 outcome 为 unconfirmed 的行动不得列入，未确认结果不得隐式停止已知运动。`passives` 只登记本轮新出现的被动影响，已有未结束的持续保留、重复声明会被拒绝，进展在 `passive_updates` 中维护、结束用 `stop_passives` 引用已存在身份；主动持握/守护属于主动行动，动作到 end 也不得把仍在主动维持的行为改写成被动。联合裁决提示另明确每个 start/checkpoint/end 节点都必须给出 outcome；进展提示明确 `updated_action_ids`/`action_progress` 只引用进行中行动。
 
-真实 DeepSeek Flash 的 3 秒短运行已正常完成 3 个周期，两名角色均开始取文件；到时限时文件仍在书桌，尚未确定归属。录制离线回放与原概要一致，网页的周期历史、角色/阶段筛选、完整模型输入输出和刷新恢复均已验证。下方默认配置保留 12 秒时限；完整 12 秒运行尚未验证通过。示例命令按 [DeepSeek 思考模式说明](https://api-docs.deepseek.com/guides/thinking_mode/) 使用低强度思考和 16000 tokens 输出预算；上述短运行使用关闭思考的 JSON 输出模式，实际行为以各次记录为准。
+真实 DeepSeek Flash 的完整 12 秒运行已验证通过：按时限正常停止，完成 12 个事件周期，最终 World 版本为 15，无运行错误。林舟在 1.8 秒完成取文件，至时限仍持有唯一一份密封文件；沈言交涉未能取得文件，随后提交报告请求上级裁定，裁定结果尚未返回。这是时限停止，未定义场景自然结束或预设胜者。
+
+录制离线回放与原概要完全一致，文件对象与父归属唯一；真实 Chromium 已验证网页全部周期、角色/阶段筛选、完整模型输入输出及刷新恢复。对应本机记录为 `sceneweave-runs/contest-secret-20261006-v13-record`（运行数据不进 Git）。下方命令与本轮验证一致，按 [DeepSeek 思考模式说明](https://api-docs.deepseek.com/guides/thinking_mode/) 使用低强度思考、16000 tokens 输出预算与 JSON 输出模式；目录名须未被使用，实际行为以各次记录为准。
 
 从项目根目录运行，使用本机 `.env` 中已配置的 `DEEPSEEK_API_KEY`：
 
 ```bash
 uv run --locked python -m sceneweave examples/configs/run-contest.json \
     --live sceneweave.integrations.concordia.chat_completions:create_model \
-    --live-options '{"base_url": "https://api.deepseek.com", "model": "deepseek-flash", "api_key_env": "DEEPSEEK_API_KEY", "timeout_seconds": 120, "max_tokens": 16000, "extra_body": {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}}' \
+    --live-options '{"base_url": "https://api.deepseek.com", "model": "deepseek-flash", "api_key_env": "DEEPSEEK_API_KEY", "timeout_seconds": 120, "max_tokens": 16000, "extra_body": {"thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"}}}' \
     --record sceneweave-runs/contest-record \
     --output sceneweave-runs/contest-output \
     --ui 8080
