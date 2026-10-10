@@ -255,6 +255,14 @@ uv run --locked python scripts/probe_translator.py --provider qwen --qwen-model 
 
 默认关闭思考（可用 `--thinking` 开启，见上），`--max-tokens` 默认 2048、temperature=0、并发 6、超时 60 秒、不重试。密钥仅私密读取，不记录请求头。输出在忽略目录 `sceneweave-runs/translator-probe/<UTC时间>/`，包含 `manifest.json`、`samples.jsonl`、`summary.json`、`report.md`。报告保留完整场景、条件、动作、实际发送的提示词、各模型每次原始输出及逐条评价；分别统计格式、登记合法性、明确耗时规则、重复差异、墙钟延迟和使用量。报告与 manifest 记录的思考状态和 max_tokens 均为本次实际配置（max_tokens 取自真实请求体）。失败不会被自动修正，缓存缺失记为未知；这些指标不代表物理实测准确率或微调收益。可用 `--report-from <运行目录>` 从已保存样本离线重建报告。
 
+[AISHELL-3 辅助数据分析](docs/AISHELL3辅助数据使用.md) 从本地压缩包流式抽取不同说话人的朗读样本，保留文本、来源、录音时长与首尾静音裁剪估计，并用训练部分的语速参考评测测试部分的耗时预测。输出在忽略目录，原始音频无需全量解压。分析只使用本地计算；这些数据提供说话耗时的参考，不能推断疲劳、情绪、行动开始延迟或 World 的执行结果。
+
+```bash
+uv run --locked python scripts/analyze_aishell3.py \
+  --archive ~/data_aishell3.tgz \
+  --outdir sceneweave-runs/aishell3/demo
+```
+
 示例 `ui_demo.py` 使用自带的精简页面（只显示最新步数据），与统一入口 `--ui` 的完整历史/模型调用视图相互独立；两者都由真实 `StepController` 驱动运行、暂停、单步与停止，回车退出或 Ctrl+C 中止都会清理服务器与控制器。`SimulationServer` 按框架默认绑定全部网络接口，请在可信环境运行，不要公开部署。
 
 ## 当前实现范围
