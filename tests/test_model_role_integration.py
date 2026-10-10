@@ -17,10 +17,18 @@ from sceneweave.integrations.concordia.control import step_data_from_report
 from sceneweave.integrations.concordia.tracing import SimulationLogTracer
 from sceneweave.roles.model_role import ModelRole
 
-from .fakes import FakeSemanticWorld, ScriptedSampler, ScriptedTranslator, ms, rid
+from .fakes import (
+    FakeSemanticWorld,
+    ScriptedSampler,
+    ScriptedTranslator,
+    ms,
+    rid,
+    s1_continue,
+    s1_rethink,
+)
 
-S1_GO = '{"route": "rethink", "note": "门被推开，需要行动"}'
-S1_SKIP = '{"route": "continue", "note": "没有新情况"}'
+S1_GO = s1_rethink("门被推开，需要行动")
+S1_SKIP = s1_continue("没有新情况")
 S2 = '{"intention": "查看书桌上的东西"}'
 S2_AGAIN = '{"intention": "查看书桌上的东西"}'
 S3_IMPOSSIBLE = '[{"kind": "grasp", "target": "不可能地隔空取物", "effector": "right_hand"}]'
@@ -104,6 +112,13 @@ def test_cross_role_parallel_sampling_with_frozen_clock() -> None:
         sampler = ScriptedSampler(
             {
                 "system1": [S1_SKIP, S1_SKIP, S1_SKIP, S1_SKIP],
+                # 首次没有意向/计划：为两名角色各提供一次思考并接受空计划，
+                # 之后才走 continue。
+                "system2": [
+                    '{"intention": "先观察，不主动行动"}',
+                    '{"intention": "先观察，不主动行动"}',
+                ],
+                "system3": ["[]", "[]"],
             },
             gate=gate,
         )

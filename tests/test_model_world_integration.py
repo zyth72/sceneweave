@@ -33,11 +33,13 @@ from .fakes import (
     new_action,
     response,
     rid,
+    s1_continue,
+    s1_rethink,
 )
 from .test_model_world import Brain, study_card
 
-S1_GO = '{"route": "rethink", "note": "门被推开了"}'
-S1_SKIP = '{"route": "continue", "note": "照旧"}'
+S1_GO = s1_rethink("门被推开了")
+S1_SKIP = s1_continue("照旧")
 S2 = '{"intention": "查看抽屉里的东西"}'
 S3_DRAWER = '[{"kind": "move", "destination": {"entity": "drawer"}}]'
 TRANSLATION = (
@@ -306,7 +308,11 @@ def test_scoped_record_replay_full_stack_two_roles(tmp_path) -> None:
                 "system2": [S2],
                 "system3": [S3_DRAWER],
             }
-        return {"system1": [S1_SKIP] * 9}
+        return {
+            "system1": [s1_rethink("先观察并接受空计划")] + [S1_SKIP] * 8,
+            "system2": ['{"intention": "先观察，不主动行动"}'],
+            "system3": ["[]"],
+        }
 
     async def scenario() -> None:
         directory = tmp_path / "recordings"
@@ -316,7 +322,7 @@ def test_scoped_record_replay_full_stack_two_roles(tmp_path) -> None:
 
         with RecordingDirectory(
             lambda scope: RoleBrain(
-                role_script("lin") if "lin" in scope else {"system1": [S1_SKIP] * 9}, scope
+                role_script("lin") if "lin" in scope else role_script("shen"), scope
             ),
             directory,
             run_id="world-dual",
@@ -458,11 +464,11 @@ def test_plan_replacement_withdraws_active_action_and_registers_new() -> None:
         role_model = RoleBrain(
             {
                 "system1": [
-                    '{"route": "rethink", "note": "开始走"}',
-                    '{"route": "continue", "note": "照旧"}',
-                    '{"route": "rethink", "note": "改主意坐下"}',
+                    s1_rethink("开始走"),
+                    s1_continue("照旧"),
+                    s1_rethink("改主意坐下"),
                 ]
-                + ['{"route": "continue", "note": "照旧"}'] * 8,
+                + [s1_continue("照旧")] * 8,
                 "system2": [
                     '{"intention": "走向窗户"}',
                     '{"intention": "改为坐着等"}',

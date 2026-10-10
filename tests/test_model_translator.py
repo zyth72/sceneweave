@@ -44,6 +44,8 @@ from .fakes import (
     ms,
     response,
     rid,
+    s1_continue,
+    s1_rethink,
 )
 
 VALID_NEW = (
@@ -328,8 +330,7 @@ def test_scheduler_rejects_bad_timing_via_role_single_perceive() -> None:
         )
         role_sampler = ScriptedSampler(
             {
-                "system1": ['{"route": "rethink", "note": "行动"}']
-                + ['{"route": "continue", "note": "照旧"}'] * 6,
+                "system1": [s1_rethink("行动")] + [s1_continue("照旧")] * 6,
                 "system2": [
                     '{"intention": "去书桌"}',
                     '{"intention": "去书桌"}',
@@ -391,8 +392,7 @@ def test_translation_wait_freezes_clock_and_queue() -> None:
         gate = asyncio.Event()
         role_sampler = ScriptedSampler(
             {
-                "system1": ['{"route": "rethink", "note": "行动"}']
-                + ['{"route": "continue", "note": "照旧"}'] * 6,
+                "system1": [s1_rethink("行动")] + [s1_continue("照旧")] * 6,
                 "system2": ['{"intention": "去窗户"}'],
                 "system3": ['[{"kind": "move", "destination": {"entity": "窗户"}}]'],
             }
@@ -441,11 +441,11 @@ def test_end_to_end_model_role_translator_stepdata_and_log() -> None:
         role_sampler = ScriptedSampler(
             {
                 "system1": [
-                    '{"route": "rethink", "note": "门开了"}',
-                    '{"route": "continue", "note": "继续"}',
-                    '{"route": "continue", "note": "继续"}',
-                    '{"route": "continue", "note": "继续"}',
-                    '{"route": "continue", "note": "继续"}',
+                    s1_rethink("门开了"),
+                    s1_continue("继续"),
+                    s1_continue("继续"),
+                    s1_continue("继续"),
+                    s1_continue("继续"),
                 ],
                 "system2": ['{"intention": "查看书桌"}'],
                 "system3": [walk_plan],
@@ -540,10 +540,10 @@ def test_real_concordia_bridge_logs_translator_raw_io() -> None:
         schedule_json = (
             '{"schedules": [{"action_id": "a-lin-1", "start": 1000, "expected_end": 3000}]}'
         )
-        skips = ['{"route": "continue", "note": "照旧"}'] * 8
+        skips = [s1_continue("照旧")] * 8
         model = StubModel(
             [
-                '{"route": "rethink", "note": "行动"}',
+                s1_rethink("行动"),
                 '{"intention": "x"}',
                 walk_plan,
                 schedule_json,
@@ -590,10 +590,10 @@ def test_scoped_record_replay_reproduces_parallel_two_role_run(tmp_path) -> None
             return ScriptedSampler(
                 {
                     "system1": [
-                        '{"route": "rethink", "note": "' + name + ' 行动"}',
-                        '{"route": "continue", "note": "照旧"}',
-                        '{"route": "continue", "note": "照旧"}',
-                        '{"route": "continue", "note": "照旧"}',
+                        s1_rethink(name + " 行动"),
+                        s1_continue("照旧"),
+                        s1_continue("照旧"),
+                        s1_continue("照旧"),
                     ],
                     "system2": ['{"intention": "看窗户"}'],
                     "system3": ['[{"kind": "move", "destination": {"entity": "窗户"}}]'],
@@ -629,10 +629,10 @@ def test_scoped_record_replay_reproduces_parallel_two_role_run(tmp_path) -> None
             lambda scope: ScriptedSampler(
                 {
                     "system1": [
-                        '{"route": "rethink", "note": "x"}',
-                        '{"route": "continue", "note": "y"}',
-                        '{"route": "continue", "note": "y"}',
-                        '{"route": "continue", "note": "y"}',
+                        s1_rethink("x"),
+                        s1_continue("y"),
+                        s1_continue("y"),
+                        s1_continue("y"),
                     ],
                     "system2": ['{"intention": "看窗户"}'],
                     "system3": ['[{"kind": "move", "destination": {"entity": "窗户"}}]'],
@@ -894,10 +894,10 @@ def test_scheduler_redeclaration_preserves_identity_and_history() -> None:
         role_sampler = ScriptedSampler(
             {
                 "system1": [
-                    '{"route": "rethink", "note": "行动"}',
-                    '{"route": "rethink", "note": "继续同一动作"}',
+                    s1_rethink("行动"),
+                    s1_rethink("继续同一动作"),
                 ]
-                + ['{"route": "continue", "note": "照旧"}'] * 8,
+                + [s1_continue("照旧")] * 8,
                 "system2": [
                     '{"intention": "慢慢走"}',
                     '{"intention": "继续走"}',

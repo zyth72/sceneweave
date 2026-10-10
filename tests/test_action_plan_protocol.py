@@ -22,7 +22,7 @@ from sceneweave.integrations.concordia.tracing import SimulationLogTracer
 from sceneweave.roles.model_role import ModelRole
 from sceneweave.translator.model_translator import ModelTranslator
 
-from .fakes import FakeSemanticWorld, ScriptedSampler, ms, rid
+from .fakes import FakeSemanticWorld, ScriptedSampler, ms, rid, s1_continue, s1_rethink
 
 
 def test_action_plan_one_dimensional_and_rejections() -> None:
@@ -43,8 +43,7 @@ def test_action_plan_one_dimensional_and_rejections() -> None:
 
 def _role_script() -> dict[str, list[str]]:
     return {
-        "system1": ['{"route": "rethink", "note": "开始"}']
-        + ['{"route": "continue", "note": "继续"}'] * 12,
+        "system1": [s1_rethink("开始")] + [s1_continue("继续")] * 12,
         "system2": ['{"intention": "依次取物"}'],
         "system3": [
             '[{"kind": "move", "destination": {"entity": "a1"}, "key": "k1"},'

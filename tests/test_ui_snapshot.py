@@ -592,3 +592,146 @@ def test_snapshot_audit_state_revision_and_disabled_compatibility() -> None:
         "models": [],
         "failed_models": 0,
     }
+
+
+def _add_policy_stage(
+    log: structured_logging.SimulationLog,
+    *,
+    step: int,
+    role_id: str,
+    details: dict[str, Any],
+    error: str | None = None,
+    summary: str = "System1 完成：程序策略选择 route=continue",
+) -> None:
+    log.add_entry(
+        step=step,
+        timestamp="2026-01-01T00:00:00+00:00",
+        entity_name=role_id,
+        component_name="system1.decide",
+        entry_type="sceneweave",
+        summary=summary,
+        raw_data={
+            "stage": "system1.decide",
+            "cycle_id": f"cycle-{step + 1}",
+            "simulation_time_ms": step * 100,
+            "role_id": role_id,
+            "response_id": f"r-{role_id}-1",
+            "event_ids": ["door"],
+            "inputs": ["完整输入提示"],
+            "outputs": [
+                '{"probabilities": {"continue": 0.825, "replan": 0.16, "rethink": 0.015}, "note": "看情况"}'
+            ],
+            "details": {"attempt_stage": "system1.decide", **details},
+            "error": error,
+        },
+    )
+
+
+def test_snapshot_includes_successful_system1_policy_with_nested_floats() -> None:
+    """成功 system1.decide 的策略信息可见；float/嵌套分布字段不被丢掉。"""
+    history = RunSnapshotHistory()
+    history.record_step({"step": 1, "entity_logs": {"world": {"simulation_time_ms": 0}}})
+    log = structured_logging.SimulationLog()
+    _add_policy_stage(
+        log,
+        step=0,
+        role_id="lin",
+        details={
+            "route": "continue",
+            "method": "sampled",
+            "reason": "below_threshold",
+            "allowed_routes": ["continue", "replan", "rethink"],
+            "raw_probabilities": {"continue": 0.5, "replan": 0.3, "rethink": 0.2},
+            "normalized_probabilities": {"continue": 0.5, "replan": 0.3, "rethink": 0.2},
+            "legal_weights": {"continue": 0.5, "replan": 0.3, "rethink": 0.2},
+            "max_weight": 0.5,
+            "margin": 0.2,
+            "random_value": 0.42,
+            "certainty_threshold": 0.75,
+            "margin_threshold": 0.25,
+            "has_intention": True,
+            "has_saved_plan": True,
+            "route_seed": 0,
+            "seed_hash": "abc123",
+            "note": "看情况",
+        },
+    )
+    payload = build_snapshot(history, log)
+    notes = [item for item in payload["calls"] if item["kind"] == "note"]
+    assert len(notes) == 1
+    policy = notes[0]
+    assert policy["is_policy"] is True and policy["is_error"] is False
+    assert policy["phase"] == "system1.decide" and policy["group"] == "lin"
+    details = policy["details"]
+    assert details["raw_probabilities"] == {"continue": 0.5, "replan": 0.3, "rethink": 0.2}
+    assert details["legal_weights"]["replan"] == 0.3
+    assert details["random_value"] == 0.42
+    assert details["certainty_threshold"] == 0.75
+    assert details["route"] == "continue" and details["method"] == "sampled"
+    assert "_ref" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_snapshot_policy_error_is_visible_but_not_reported_as_success() -> None:
+    history = RunSnapshotHistory()
+    log = structured_logging.SimulationLog()
+    _add_policy_stage(
+        log,
+        step=0,
+        role_id="lin",
+        details={"route": None, "reason": "zero_remaining"},
+        error="允许路径的归一化权重之和为 0",
+        summary="System1 程序策略无法选择合法路由",
+    )
+    payload = build_snapshot(history, log)
+    [note] = [item for item in payload["calls"] if item["kind"] == "note"]
+    assert note["is_policy"] is False and note["is_error"] is True
+    assert note["error"] == "允许路径的归一化权重之和为 0"
+    assert "无法选择合法路由" in note["summary_text"]
+
+
+def test_call_summary_shows_system1_distribution_percentages_and_note() -> None:
+    history = RunSnapshotHistory()
+    log = structured_logging.SimulationLog()
+    _add_component(
+        log,
+        step=0,
+        scope="role:lin",
+        role_id="lin",
+        component="system1",
+        raw={
+            "Response": '{"probabilities": {"continue": 0.825, "replan": 0.16,'
+            ' "rethink": 0.015}, "note": "影响轻微"}'
+        },
+    )
+    payload = build_snapshot(history, log)
+    [call] = [item for item in payload["calls"] if item["kind"] == "call"]
+    assert call["distribution"] == {"continue": 0.825, "replan": 0.16, "rethink": 0.015}
+    assert (
+        call["summary_text"] == "倾向：continue 82.5% / replan 16% / rethink 1.5%；说明：影响轻微"
+    )
+
+
+def test_page_has_system1_bars_and_avoids_innerhtml_injection() -> None:
+    # 页面必须用 textContent 渲染模型文本，并有专门的三路百分比条与策略块。
+    assert "system1Bars" in PAGE and "system1PolicyBlock" in PAGE
+    assert "legal_weights" in PAGE and "raw_probabilities" in PAGE
+    assert "innerHTML" not in PAGE
+    # 恶意模型文本在快照里始终是普通字符串，不会变成 HTML。
+    history = RunSnapshotHistory()
+    log = structured_logging.SimulationLog()
+    _add_component(
+        log,
+        step=0,
+        scope="role:lin",
+        role_id="lin",
+        component="system1",
+        raw={
+            "Response": '{"probabilities": {"continue": 1.0, "replan": 0.0,'
+            ' "rethink": 0.0}, "note": "<img src=x onerror=alert(1)>"}'
+        },
+    )
+    payload = build_snapshot(history, log)
+    [call] = [item for item in payload["calls"] if item["kind"] == "call"]
+    assert "<img src=x onerror=alert(1)>" in call["summary_text"]
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "<img" in serialized  # 只是文本，不是页面结构

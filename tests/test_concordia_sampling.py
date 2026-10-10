@@ -24,10 +24,10 @@ from sceneweave.integrations.concordia.sampling import (
 )
 from sceneweave.integrations.concordia.tracing import component_logging_channel
 
-from .fakes import ScriptedSampler, ScriptedTranslator, rid
+from .fakes import ScriptedSampler, ScriptedTranslator, rid, s1_continue, s1_rethink
 
 RESPONSES = [
-    '{"route": "rethink", "note": "有变化"}',
+    s1_rethink("有变化"),
     '{"intention": "去书桌旁"}',
     '[{"kind": "move", "destination": {"entity": "书桌"}}]',
 ]
@@ -314,10 +314,10 @@ def test_two_role_parallel_run_recorded_by_scope_and_replayed(tmp_path) -> None:
             return GatedSampler(
                 {
                     "system1": [
-                        '{"route": "rethink", "note": "' + name + ' 有变化"}',
-                        '{"route": "continue", "note": "照旧"}',
-                        '{"route": "continue", "note": "照旧"}',
-                        '{"route": "continue", "note": "照旧"}',
+                        s1_rethink(name + " 有变化"),
+                        s1_continue("照旧"),
+                        s1_continue("照旧"),
+                        s1_continue("照旧"),
                     ],
                     "system2": ['{"intention": "看窗户"}'],
                     "system3": ['[{"kind": "move", "destination": {"entity": "窗户"}}]'],

@@ -733,8 +733,8 @@ def test_cli_builtin_factory_config_error_is_clean_and_offline(
 # ---- 完整装配 + runner + 组件日志 + 录制/重放 ----
 
 
-_S1_GO = '{"route": "rethink", "note": "门被推开了"}'
-_S1_SKIP = '{"route": "continue", "note": "照旧"}'
+_S1_GO = '{"probabilities": {"continue": 0.0, "replan": 0.0, "rethink": 1.0}, "note": "门被推开了"}'
+_S1_SKIP = '{"probabilities": {"continue": 1.0, "replan": 0.0, "rethink": 0.0}, "note": "照旧"}'
 _S2 = '{"intention": "查看抽屉里的东西"}'
 _S3 = '[{"kind": "move", "destination": {"entity": "drawer"}}]'
 _TRANSLATION = (
@@ -748,7 +748,8 @@ class _FullStackResponder:
 
     def __init__(self) -> None:
         self._world = Brain()
-        self._system1_calls = 0
+        self._lin_s1_calls = 0
+        self._shen_s1_calls = 0
 
     def __call__(self, body: dict[str, Any]) -> _Reply:
         messages = body["messages"]
@@ -761,11 +762,17 @@ class _FullStackResponder:
             answer = self._world._adjudicate(prompt)  # noqa: SLF001
         elif "你是行动翻译器" in prompt:
             answer = _TRANSLATION
-        elif "你是角色 shen" in prompt:
-            answer = _S1_SKIP
+        elif "你是角色 shen" in prompt and "第一步" in prompt:
+            # 首次没有意向/计划：结构强制 rethink，先接受空计划，之后 continue。
+            self._shen_s1_calls += 1
+            answer = _S1_GO if self._shen_s1_calls == 1 else _S1_SKIP
+        elif "你是角色 shen" in prompt and "第二步" in prompt:
+            answer = '{"intention": "先观察，不主动行动"}'
+        elif "你是角色 shen" in prompt and "第三步" in prompt:
+            answer = "[]"
         elif "你是角色 lin" in prompt and "第一步" in prompt:
-            self._system1_calls += 1
-            answer = _S1_GO if self._system1_calls == 1 else _S1_SKIP
+            self._lin_s1_calls += 1
+            answer = _S1_GO if self._lin_s1_calls == 1 else _S1_SKIP
         elif "你是角色 lin" in prompt and "第二步" in prompt:
             answer = _S2
         elif "你是角色 lin" in prompt and "第三步" in prompt:

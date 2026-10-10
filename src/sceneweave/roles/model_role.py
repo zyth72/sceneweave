@@ -44,7 +44,11 @@ from sceneweave.roles.base import Role
 from sceneweave.roles.components import system1, system2, system3
 from sceneweave.roles.components.base import TextSampler
 from sceneweave.roles.components.support import OwnActionDigest, TurnFacts, trace_stage
-from sceneweave.roles.model_output import ModelOutputError, System1Route
+from sceneweave.roles.components.system1_policy import (
+    DEFAULT_SYSTEM1_ROUTE_SEED,
+    derive_route_rng,
+)
+from sceneweave.roles.model_output import ModelOutputError, System1Route, System1RoutePolicy
 
 # 仍可被主动维持的阶段；未确认表示结果未知，不是已知终止。
 _MAINTAINABLE = frozenset({ActionPhase.REGISTERED, ActionPhase.STARTED, ActionPhase.UNCONFIRMED})
@@ -110,6 +114,8 @@ class ModelRole(Role):
         max_memory: int = 32,
         max_system2_calls: int = 3,
         max_system3_calls: int = 4,
+        route_seed: int = DEFAULT_SYSTEM1_ROUTE_SEED,
+        route_policy: System1RoutePolicy | None = None,
     ) -> None:
         if not isinstance(role_id, str) or not role_id:
             raise ValueError("角色身份必须是非空字符串")
@@ -124,6 +130,11 @@ class ModelRole(Role):
         # 单个周期内的落实与升级次数。
         self._max_system2_calls = _require_positive(max_system2_calls, "System2 次数上限")
         self._max_system3_calls = _require_positive(max_system3_calls, "System3 次数上限")
+        # System1 程序路由的随机源在角色边界显式派生：每角色独立、可复现，
+        # 只由 route_seed 与角色身份决定，不受并发调用次序影响。
+        self._route_seed = route_seed
+        self._route_rng, self._route_seed_hash = derive_route_rng(route_seed, role_id)
+        self._route_policy = route_policy if route_policy is not None else System1RoutePolicy()
         self._memory: list[str] = []
         # 全部历史行动身份都保留：新行动身份永不复用；未确认的候选身份
         # 同样保留但不可维持。
@@ -194,8 +205,13 @@ class ModelRole(Role):
                 response_id=response_id,
                 intention=self._intention,
                 plan_digest=self._plan_digest(),
+                has_saved_plan=self._saved is not None,
                 background=self._background,
                 tracer=self._tracer,
+                policy=self._route_policy,
+                rng=self._route_rng,
+                route_seed=self._route_seed,
+                seed_hash=self._route_seed_hash,
             )
             self._remember(decision.note)
             if decision.route is System1Route.CONTINUE:

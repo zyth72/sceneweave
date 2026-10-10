@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -24,6 +25,7 @@ from concordia.utils import structured_logging
 from concordia.utils.simulation_server import SimulationServer
 
 from sceneweave.audit.session import AuditState
+from sceneweave.roles.model_output import ModelOutputError, parse_system1_tendency
 
 SNAPSHOT_PATH = "/run-snapshot"
 
@@ -33,6 +35,58 @@ _SKIP_SUFFIXES = (".skip", ".skipped")
 
 def _is_skip_stage(stage: str) -> bool:
     return stage.endswith(_SKIP_SUFFIXES)
+
+
+# System1 成功的程序策略留痕也需要在界面可读；其余成功阶段不收录。
+_POLICY_STAGE = "system1.decide"
+
+_ROUTE_LABELS = {
+    "continue": "沿用已保存计划",
+    "replan": "保留意向重新落实",
+    "rethink": "重选意向",
+}
+_SYSTEM1_ROUTES = ("continue", "replan", "rethink")
+
+
+def _safe_json_value(value: Any) -> Any:
+    """递归保留安全 JSON 值（含 float 与嵌套分布），丢弃不支持的标量。
+
+    模型文本不在此列；这里只用于程序写入的阶段细节，保证分布、阈值与
+    随机抽值等数值字段在快照中不被丢弃。
+    """
+    if value is None or type(value) is bool:
+        return value
+    if type(value) is int:
+        return value
+    if type(value) is float:
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_safe_json_value(item) for item in value]
+    if isinstance(value, dict):
+        kept: dict[str, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, str) and key:
+                kept[key] = _safe_json_value(item)
+        return kept
+    return None
+
+
+def _system1_distribution(raw: Any) -> dict[str, float] | None:
+    """复用正式解析器，坏输出只展示原文，不画成合法分布。"""
+    if not isinstance(raw, str):
+        return None
+    try:
+        tendency = parse_system1_tendency(raw)
+    except ModelOutputError:
+        return None
+    return {route.value: value for route, value in tendency.probabilities.items()}
+
+
+def _percent(value: float) -> str:
+    text = f"{value * 100:.2f}".rstrip("0").rstrip(".")
+    return text + "%"
 
 
 def _text(value: Any) -> str | None:
@@ -133,13 +187,16 @@ def _call_summary(component: str, item: dict[str, Any]) -> str:
             return f"结构化动作计划：{len(data)} 个动作"
         return "回答不是 JSON 对象；展开可查看原始回答。"
     if component == "system1":
+        distribution = _system1_distribution(raw)
+        note = data.get("note")
+        if distribution is not None and isinstance(note, str):
+            trend = " / ".join(
+                f"{route} {_percent(distribution[route])}" for route in _SYSTEM1_ROUTES
+            )
+            return f"倾向：{trend}；说明：{_short(note)}"
         if isinstance(data.get("route"), str) and isinstance(data.get("note"), str):
-            labels = {
-                "continue": "沿用已保存计划",
-                "replan": "保留意向重新落实",
-                "rethink": "重选意向",
-            }
-            route = labels.get(data["route"], data["route"])
+            # 旧日志兼容：历史记录可能仍是 route 字段，如实展示，不猜分布。
+            route = _ROUTE_LABELS.get(data["route"], data["route"])
             return f"分流：{route}；说明：{_short(data['note'])}"
     elif component == "system2":
         if isinstance(data.get("intention"), str):
@@ -200,6 +257,7 @@ def _call_item(
         "entry_index": index,
         "step": entry.step,
         "cycle_id": _text(data.get("cycle_id")),
+        "response_id": _text(data.get("response_id")),
         "simulation_time_ms": _optional_int(data.get("simulation_time_ms")),
         "scope": scope,
         "role_id": role_id,
@@ -214,6 +272,10 @@ def _call_item(
         "error_type": error_type,
         "error_message": error_message,
     }
+    # 三路倾向分布保留为结构化字段（服务端已校验有限数值），供页面画百分比条。
+    item["distribution"] = (
+        _system1_distribution(item["response"]) if component == "system1" else None
+    )
     item["summary_text"] = _call_summary(component, item)
     return item
 
@@ -227,7 +289,8 @@ def _stage_item(
     stage = _text(data.get("stage")) or entry.component_name
     error = _text(data.get("error"))
     skipped = _is_skip_stage(stage)
-    if not skipped and error is None:
+    is_policy = stage == _POLICY_STAGE and error is None and not skipped
+    if not skipped and error is None and not is_policy:
         return None
     role_id = _text(data.get("role_id"))
     raw_inputs = data.get("inputs")
@@ -243,13 +306,7 @@ def _stage_item(
         else []
     )
     raw_details = data.get("details")
-    details: dict[str, Any] = {}
-    if isinstance(raw_details, dict):
-        for detail_key, detail_value in raw_details.items():
-            if isinstance(detail_key, str) and (
-                detail_value is None or isinstance(detail_value, (str, int, bool))
-            ):
-                details[detail_key] = detail_value
+    details = _safe_json_value(raw_details) if isinstance(raw_details, dict) else {}
     summary_text = entry.summary
     if error is not None:
         summary_text = f"{entry.summary}：{_short(error)}"
@@ -258,6 +315,7 @@ def _stage_item(
         "entry_index": index,
         "step": entry.step,
         "cycle_id": _text(data.get("cycle_id")),
+        "response_id": _text(data.get("response_id")),
         "simulation_time_ms": _optional_int(data.get("simulation_time_ms")),
         "scope": None,
         "role_id": role_id,
@@ -268,6 +326,7 @@ def _stage_item(
         "summary_text": summary_text,
         "is_error": error is not None,
         "is_skip": skipped,
+        "is_policy": is_policy,
         "inputs": inputs,
         "outputs": outputs,
         "details": details,

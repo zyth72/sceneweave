@@ -8,6 +8,7 @@ FakeSemanticWorld 自身履行 World 契约：原子提交（校验通过后一�
 """
 
 import asyncio
+import json
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -62,6 +63,31 @@ from sceneweave.world.base import World
 
 def rid(name: str) -> RoleId:
     return RoleId(name)
+
+
+def s1(route: str, note: str = "说明") -> str:
+    """构造正式 System1 三路倾向响应：给定 route 置 1 的 one-hot 分布。
+
+    旧枚举测试可直接换成对应 one-hot 以保留本来测试的选路；分布与 note
+    都是新 schema 的合法输出。
+    """
+    weights = {"continue": 0.0, "replan": 0.0, "rethink": 0.0}
+    if route not in weights:
+        raise ValueError(f"未知 route：{route}")
+    weights[route] = 1.0
+    return json.dumps({"probabilities": weights, "note": note}, ensure_ascii=False)
+
+
+def s1_continue(note: str = "照旧") -> str:
+    return s1("continue", note)
+
+
+def s1_replan(note: str = "换做法") -> str:
+    return s1("replan", note)
+
+
+def s1_rethink(note: str = "重新决定") -> str:
+    return s1("rethink", note)
 
 
 def cycle(name: str) -> CycleId:

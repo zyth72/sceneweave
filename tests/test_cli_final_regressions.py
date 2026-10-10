@@ -18,6 +18,8 @@ from sceneweave.app.ui import run_ui
 from sceneweave.config.loader import load_assembly_config
 from sceneweave.integrations.concordia.sampling import LanguageModelSampler
 
+from .fakes import s1_continue
+
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples/configs/run.json"
 
 
@@ -236,7 +238,11 @@ def test_valid_role_identity_cannot_overwrite_ui_world_diagnostics() -> None:
         ),
     )
     scripts = {
-        f"role:{role.role_id}": {"system1": ['{"route": "continue","note":"观察"}'] * 5}
+        f"role:{role.role_id}": {
+            "system1": [s1_continue("观察")] * 5,
+            "system2": ['{"intention": "先观察，不主动行动"}'],
+            "system3": ["[]"],
+        }
         for role in config.roles
     }
     assembly = assemble(config, build_scripted_factory(scripts))

@@ -12,7 +12,7 @@ from concordia.typing.logging import LoggingChannel
 from concordia.utils import structured_logging
 
 from sceneweave.domain.identity import CycleId
-from sceneweave.domain.tracing import TraceRecord, TurnTracer
+from sceneweave.domain.tracing import TraceRecord, TurnTracer, trace_details_to_json
 
 _ENGINE_ENTITY = "engine"
 
@@ -68,7 +68,7 @@ class SimulationLogTracer(TurnTracer):
             "outputs": list(record.outputs),
             "world_state_version": record.world_state_version,
             "error": record.error,
-            "details": dict(record.details),
+            "details": trace_details_to_json(record.details),
         }
         self._log.add_entry(
             step=self._steps.step_for(record.cycle_id),

@@ -232,13 +232,34 @@ async def main() -> None:
     scene = load_scene_card(SCENE_CARD)
     role_model = ScriptedModel(
         {
-            "system1": ['{"route": "rethink", "note": "门被推开了"}']
-            + ['{"route": "continue", "note": "照旧"}'] * 10,
+            "system1": [
+                '{"probabilities": {"continue": 0.0, "replan": 0.0, "rethink": 1.0},'
+                ' "note": "门被推开了"}'
+            ]
+            + [
+                '{"probabilities": {"continue": 1.0, "replan": 0.0, "rethink": 0.0},'
+                ' "note": "照旧"}'
+            ]
+            * 10,
             "system2": ['{"intention": "走到书桌旁看看"}'],
             "system3": ['[{"kind": "move", "destination": {"entity": "desk"}}]'],
         }
     )
-    shen_model = ScriptedModel({"system1": ['{"route": "continue", "note": "照旧"}'] * 11})
+    shen_model = ScriptedModel(
+        {
+            "system1": [
+                '{"probabilities": {"continue": 0.0, "replan": 0.0, "rethink": 1.0},'
+                ' "note": "先观察并接受空计划"}'
+            ]
+            + [
+                '{"probabilities": {"continue": 1.0, "replan": 0.0, "rethink": 0.0},'
+                ' "note": "照旧"}'
+            ]
+            * 10,
+            "system2": ['{"intention": "先观察，不主动行动"}'],
+            "system3": ["[]"],
+        }
+    )
     translator_model = ScriptedModel(
         {
             "translator": [

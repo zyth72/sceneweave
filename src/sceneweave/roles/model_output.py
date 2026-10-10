@@ -6,7 +6,10 @@
 """
 
 import enum
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from sceneweave.domain.action_plan import ActionPlan, parse_action_plan
@@ -34,23 +37,150 @@ class System1Route(enum.StrEnum):
     RETHINK = "rethink"
 
 
+# 三路倾向之和允许的舍入容差；原始值仍按模型给出的数值保存。
+SYSTEM1_PROBABILITY_SUM_TOLERANCE = 0.02
+
+# 模型自报倾向：三个路径的原始值构成的不可变分布。
+_SYSTEM1_ROUTE_VALUES = tuple(route.value for route in System1Route)
+
+
+@dataclass(frozen=True, slots=True)
+class System1Tendency:
+    """System1 模型自报的三路路径倾向分布（原始值 + 归一化记录）。
+
+    三个数是「本次事件对本角色状态影响所驱动的路径倾向」，不是世界事件
+    概率，也未经校准。这里只保存模型给出的原始有限数值与总和；归一化只
+    在有记录的情况下进行，不静默改写原始值。
+    """
+
+    probabilities: Mapping[System1Route, float]
+    note: str
+    total: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.note, str) or not self.note:
+            raise ModelOutputError("note 必须是非空字符串")
+        if type(self.total) is not float or not math.isfinite(self.total) or self.total <= 0.0:
+            raise ModelOutputError("probabilities 总和必须是正有限数值")
+        if not isinstance(self.probabilities, Mapping) or set(self.probabilities) != set(
+            System1Route
+        ):
+            raise ModelOutputError("probabilities 必须恰好包含三个路径")
+        frozen: dict[System1Route, float] = {}
+        for route in System1Route:
+            value = self.probabilities.get(route)
+            if type(value) is not float or not math.isfinite(value):
+                raise ModelOutputError(f"probabilities.{route.value} 必须是有限数值")
+            if value < 0.0 or value > 1.0:
+                raise ModelOutputError(f"probabilities.{route.value} 必须在 0..1")
+            frozen[route] = value
+        if self.total != math.fsum(frozen.values()):
+            raise ModelOutputError("probabilities 总和与三路数值不一致")
+        if (
+            not 1.0 - SYSTEM1_PROBABILITY_SUM_TOLERANCE
+            <= self.total
+            <= 1.0 + SYSTEM1_PROBABILITY_SUM_TOLERANCE
+        ):
+            raise ModelOutputError(
+                f"probabilities 之和必须约为 1（容差 {SYSTEM1_PROBABILITY_SUM_TOLERANCE}），"
+                f"得到 {self.total}"
+            )
+        object.__setattr__(self, "probabilities", MappingProxyType(frozen))
+
+    def normalized(self) -> Mapping[System1Route, float]:
+        """按总和归一化后的三路权重（总和>0 在解析时已校验）。"""
+        return MappingProxyType(
+            {route: self.probabilities[route] / self.total for route in System1Route}
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class System1RoutePolicy:
+    """可注入的 System1 程序路由策略（确定性阈值）。
+
+    - ``certainty_threshold``：合法归一化分布的最大权重达到该值即确定选择。
+    - ``margin_threshold``：最大与次大权重之差达到该值即确定选择。
+    任一满足且存在唯一最大项时直接确定；否则按合法归一化分布采样。阈值
+    必须是 0..1 的有限数值。
+    """
+
+    certainty_threshold: float = 0.75
+    margin_threshold: float = 0.25
+
+    def __post_init__(self) -> None:
+        for name in ("certainty_threshold", "margin_threshold"):
+            value = getattr(self, name)
+            if type(value) is bool or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} 必须是数值")
+            try:
+                number = float(value)
+            except OverflowError as error:
+                raise ValueError(f"{name} 数值超出可表示范围") from error
+            if not math.isfinite(number):
+                raise ValueError(f"{name} 必须是有限数值")
+            if number < 0.0 or number > 1.0:
+                raise ValueError(f"{name} 必须在 0..1")
+            object.__setattr__(self, name, number)
+
+
+# 模型只能输出倾向；最终 route 由程序策略决定，选择方式与原因如实记录。
+SYSTEM1_METHOD_FORCED = "forced"
+SYSTEM1_METHOD_DETERMINISTIC = "deterministic"
+SYSTEM1_METHOD_SAMPLED = "sampled"
+
+
 @dataclass(frozen=True, slots=True)
 class System1Decision:
-    """System1 的判断结果：三路分流与认知更新说明。
+    """System1 的程序路由结果：由合法分布 + 本角色结构状态生成。
 
-    - ``continue``：沿用已保存的完整链与排程，不调用 System2/3/翻译器。
-    - ``replan``：保留当前意向，只让 System3 重新落实。
-    - ``rethink``：重新选择意向（System2）后再落实；首次无意向必须 rethink。
+    route 与 note 供角色编排使用；其余字段只用于留痕与审计，不进入其他
+    角色感知。``method`` 取 forced/deterministic/sampled；``reason`` 是稳定
+    原因标记（no_intention/threshold/tie/below_threshold）。
     """
 
     route: System1Route
     note: str
+    method: str
+    reason: str
+    allowed_routes: tuple[System1Route, ...]
+    raw_probabilities: Mapping[System1Route, float]
+    normalized_probabilities: Mapping[System1Route, float]
+    legal_weights: Mapping[System1Route, float]
+    max_weight: float
+    margin: float
+    random_value: float | None
+    certainty_threshold: float
+    margin_threshold: float
+    route_seed: int
+    seed_hash: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.route, System1Route):
             raise ModelOutputError("route 必须是 System1Route")
         if not isinstance(self.note, str) or not self.note:
             raise ModelOutputError("note 必须是非空字符串")
+        if self.method not in (
+            SYSTEM1_METHOD_FORCED,
+            SYSTEM1_METHOD_DETERMINISTIC,
+            SYSTEM1_METHOD_SAMPLED,
+        ):
+            raise ModelOutputError(f"未知选择方式：{self.method!r}")
+        if not isinstance(self.reason, str) or not self.reason:
+            raise ModelOutputError("选择原因必须是非空字符串")
+        if self.route not in self.allowed_routes:
+            raise ModelOutputError("route 必须属于允许路径")
+        for name in ("raw_probabilities", "normalized_probabilities", "legal_weights"):
+            mapping = getattr(self, name)
+            if not isinstance(mapping, Mapping):
+                raise ModelOutputError(f"{name} 必须是映射")
+            frozen: dict[System1Route, float] = {}
+            for key, value in mapping.items():
+                if not isinstance(key, System1Route):
+                    raise ModelOutputError(f"{name} 的键必须是 System1Route")
+                if type(value) is not float or not math.isfinite(value):
+                    raise ModelOutputError(f"{name}.{key.value} 必须是有限数值")
+                frozen[key] = value
+            object.__setattr__(self, name, MappingProxyType(frozen))
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,18 +255,55 @@ def parse_model_json(raw: str, stage: str, *, allowed_keys: tuple[str, ...]) -> 
         raise ModelOutputError(str(error)) from error
 
 
-def parse_system1_decision(raw: str) -> System1Decision:
-    """System1 输出：{"route": "continue|replan|rethink", "note": str}，两字段必填。"""
-    data = parse_model_json(raw, "system1", allowed_keys=("route", "note"))
-    _require_keys(data, ("route", "note"), "system1")
-    raw_route = data["route"]
-    if not isinstance(raw_route, str):
-        raise ModelOutputError(f"route 必须是字符串，得到：{raw_route!r}")
-    try:
-        route = System1Route(raw_route)
-    except ValueError as error:
-        raise ModelOutputError(f"未知 route：{raw_route!r}") from error
-    return System1Decision(route=route, note=_require_str(data["note"], "note"))
+def parse_system1_tendency(raw: str) -> System1Tendency:
+    """System1 输出：恰好两个外层字段与三个内层路径的倾向分布。
+
+    结构约束：``{"probabilities": {"continue": float, "replan": float,
+    "rethink": float}, "note": str}``；三个数必须是有限 0..1 数值（拒绝
+    bool/字符串/NaN/Infinity），note 非空，总和为正且距 1 不超过容差。
+    旧的 ``{"route": ...}`` schema 不是本解析器的合法形状，明确拒绝，
+    不做静默兼容。
+    """
+    data = parse_model_json(raw, "system1", allowed_keys=("probabilities", "note"))
+    _require_keys(data, ("probabilities", "note"), "system1")
+    raw_probabilities = data["probabilities"]
+    if not isinstance(raw_probabilities, dict):
+        raise ModelOutputError("probabilities 必须是 JSON 对象")
+    unknown = sorted(set(raw_probabilities) - set(_SYSTEM1_ROUTE_VALUES))
+    if unknown:
+        raise ModelOutputError(f"probabilities 包含未知路径：{unknown}")
+    missing = [name for name in _SYSTEM1_ROUTE_VALUES if name not in raw_probabilities]
+    if missing:
+        raise ModelOutputError(f"probabilities 缺少路径：{missing}")
+    values: dict[System1Route, float] = {}
+    for route in System1Route:
+        raw_value = raw_probabilities[route.value]
+        if type(raw_value) is bool or not isinstance(raw_value, (int, float)):
+            raise ModelOutputError(f"probabilities.{route.value} 必须是数值，不能是 bool 或字符串")
+        try:
+            value = float(raw_value)
+        except OverflowError as error:
+            raise ModelOutputError(f"probabilities.{route.value} 数值超出可表示范围") from error
+        if not math.isfinite(value):
+            raise ModelOutputError(f"probabilities.{route.value} 必须是有限数值")
+        if value < 0.0 or value > 1.0:
+            raise ModelOutputError(f"probabilities.{route.value} 必须在 0..1：{value}")
+        values[route] = value
+    total = math.fsum(values.values())
+    if total <= 0.0:
+        raise ModelOutputError("probabilities 之和必须为正")
+    if (
+        not 1.0 - SYSTEM1_PROBABILITY_SUM_TOLERANCE
+        <= total
+        <= 1.0 + SYSTEM1_PROBABILITY_SUM_TOLERANCE
+    ):
+        raise ModelOutputError(
+            f"probabilities 之和必须约为 1（容差 {SYSTEM1_PROBABILITY_SUM_TOLERANCE}），"
+            f"得到 {total}"
+        )
+    return System1Tendency(
+        probabilities=values, note=_require_str(data["note"], "note"), total=total
+    )
 
 
 def parse_system2_intention(raw: str) -> System2Intention:

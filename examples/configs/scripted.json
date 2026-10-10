@@ -1,14 +1,14 @@
 {
   "role:lin": {
     "system1": [
-      "{\"route\": \"rethink\", \"note\": \"书房很安静，林舟想调查抽屉\"}",
-      "{\"route\": \"continue\", \"note\": \"继续当前行动\"}",
-      "{\"route\": \"continue\", \"note\": \"继续当前行动\"}",
-      "{\"route\": \"continue\", \"note\": \"继续当前行动\"}",
-      "{\"route\": \"continue\", \"note\": \"继续当前行动\"}",
-      "{\"route\": \"continue\", \"note\": \"继续当前行动\"}",
-      "{\"route\": \"continue\", \"note\": \"继续当前行动\"}",
-      "{\"route\": \"continue\", \"note\": \"继续当前行动\"}"
+      "{\"probabilities\": {\"continue\": 0.0, \"replan\": 0.0, \"rethink\": 1.0}, \"note\": \"书房很安静，林舟想调查抽屉\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"继续当前行动\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"继续当前行动\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"继续当前行动\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"继续当前行动\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"继续当前行动\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"继续当前行动\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"继续当前行动\"}"
     ],
     "system2": [
       "{\"intention\": \"走到书桌旁并打开抽屉\"}"
@@ -19,14 +19,20 @@
   },
   "role:shen": {
     "system1": [
-      "{\"route\": \"continue\", \"note\": \"没有新情况\"}",
-      "{\"route\": \"continue\", \"note\": \"照旧\"}",
-      "{\"route\": \"continue\", \"note\": \"照旧\"}",
-      "{\"route\": \"continue\", \"note\": \"照旧\"}",
-      "{\"route\": \"continue\", \"note\": \"照旧\"}",
-      "{\"route\": \"continue\", \"note\": \"照旧\"}",
-      "{\"route\": \"continue\", \"note\": \"照旧\"}",
-      "{\"route\": \"continue\", \"note\": \"照旧\"}"
+      "{\"probabilities\": {\"continue\": 0.0, \"replan\": 0.0, \"rethink\": 1.0}, \"note\": \"先观察并接受空计划\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"照旧\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"照旧\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"照旧\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"照旧\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"照旧\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"照旧\"}",
+      "{\"probabilities\": {\"continue\": 1.0, \"replan\": 0.0, \"rethink\": 0.0}, \"note\": \"照旧\"}"
+    ],
+    "system2": [
+      "{\"intention\": \"先观察，不主动行动\"}"
+    ],
+    "system3": [
+      "[]"
     ]
   },
   "translator:lin": {

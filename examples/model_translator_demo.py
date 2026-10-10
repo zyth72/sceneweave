@@ -27,8 +27,10 @@ from sceneweave.integrations.concordia.tracing import SimulationLogTracer
 from sceneweave.roles.model_role import ModelRole
 from sceneweave.translator.model_translator import ModelTranslator
 
-S1_GO = '{"route": "rethink", "note": "门被推开，需要行动"}'
-S1_SKIP = '{"route": "continue", "note": "没有新情况"}'
+S1_GO = '{"probabilities": {"continue": 0.0, "replan": 0.0, "rethink": 1.0}, "note": "门被推开，需要行动"}'
+S1_SKIP = (
+    '{"probabilities": {"continue": 1.0, "replan": 0.0, "rethink": 0.0}, "note": "没有新情况"}'
+)
 S2 = '{"intention": "查看书桌上的东西"}'
 S3_WALK = '[{"kind": "move", "destination": {"entity": "书桌"}}]'
 # 行动身份由角色分配（a-lin_zhou-1）——脚本假件按该身份返回安排。
@@ -87,7 +89,13 @@ async def main() -> None:
             "system3": [S3_WALK],
         }
     )
-    shen_model = ScriptedModel({"system1": [S1_SKIP] * 7})
+    shen_model = ScriptedModel(
+        {
+            "system1": [S1_GO] + [S1_SKIP] * 6,
+            "system2": ['{"intention": "先观察，不主动行动"}'],
+            "system3": ["[]"],
+        }
+    )
     translator_model = ScriptedModel({"translator": [TRANSLATION]})
     world = DemoWorld()
     scheduler = Scheduler(

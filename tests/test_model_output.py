@@ -12,41 +12,136 @@ from sceneweave.domain.action_plan import (
 from sceneweave.domain.model_json import ModelJsonError
 from sceneweave.roles.model_output import (
     ModelOutputError,
-    System1Decision,
     System1Route,
+    System1RoutePolicy,
+    System1Tendency,
     System2Intention,
     System3Unfulfillable,
-    parse_system1_decision,
+    parse_system1_tendency,
     parse_system2_intention,
     parse_system3_output,
     parse_system3_plan,
 )
 
 
-def test_system1_valid_decision_parses() -> None:
-    decision = parse_system1_decision('{"route": "rethink", "note": "门开了，需要警惕"}')
-    assert decision == System1Decision(route=System1Route.RETHINK, note="门开了，需要警惕")
-    assert parse_system1_decision('{"route": "continue", "note": "照旧"}').route is (
-        System1Route.CONTINUE
+def test_system1_valid_tendency_parses() -> None:
+    tendency = parse_system1_tendency(
+        '{"probabilities": {"continue": 0.82, "replan": 0.16, "rethink": 0.02}, '
+        '"note": "事件影响中等"}'
     )
-    assert parse_system1_decision('{"route": "replan", "note": "重做"}').route is (
-        System1Route.REPLAN
+    assert tendency == System1Tendency(
+        probabilities={
+            System1Route.CONTINUE: 0.82,
+            System1Route.REPLAN: 0.16,
+            System1Route.RETHINK: 0.02,
+        },
+        note="事件影响中等",
+        total=1.0,
     )
+    assert tendency.probabilities[System1Route.CONTINUE] == 0.82
+    assert abs(tendency.total - 1.0) < 1e-9
+    normalized = tendency.normalized()
+    assert abs(normalized[System1Route.CONTINUE] - 0.82) < 1e-9
 
 
-def test_system1_missing_fields_and_bad_types_are_errors() -> None:
+def test_system1_rounding_tolerance_keeps_raw_values() -> None:
+    """允许舍入容差，但保存原始值，归一化有记录（不静默改写原始数）。"""
+    tendency = parse_system1_tendency(
+        '{"probabilities": {"continue": 0.5, "replan": 0.25, "rethink": 0.24}, "note": "舍入"}'
+    )
+    assert tendency.total == 0.99
+    assert tendency.probabilities[System1Route.RETHINK] == 0.24, "原始值保持"
+    assert abs(tendency.normalized()[System1Route.CONTINUE] - 0.5 / 0.99) < 1e-9
+
+
+def test_system1_old_route_schema_is_explicitly_rejected() -> None:
+    with pytest.raises(ModelOutputError, match="未知字段"):
+        parse_system1_tendency('{"route": "continue", "note": "旧 schema"}')
+
+
+def test_system1_outer_and_inner_field_errors() -> None:
     with pytest.raises(ModelOutputError, match="缺少必填字段"):
-        parse_system1_decision('{"note": "缺少判断"}')
-    with pytest.raises(ModelOutputError, match="未知 route"):
-        parse_system1_decision('{"route": "reconsider", "note": "旧字段"}')
-    with pytest.raises(ModelOutputError, match="route 必须是字符串"):
-        parse_system1_decision('{"route": 1, "note": "类型错误"}')
+        parse_system1_tendency('{"note": "缺分布"}')
+    with pytest.raises(ModelOutputError, match="未知字段"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": 1.0, "replan": 0.0, "rethink": 0.0},'
+            ' "note": "x", "extra": 1}'
+        )
+    with pytest.raises(ModelOutputError, match="probabilities 必须是 JSON 对象"):
+        parse_system1_tendency('{"probabilities": 1.0, "note": "x"}')
+    with pytest.raises(ModelOutputError, match="未知路径"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": 0.5, "replan": 0.3, "rethink": 0.2, "wait": 0.0},'
+            ' "note": "x"}'
+        )
+    with pytest.raises(ModelOutputError, match="缺少路径"):
+        parse_system1_tendency('{"probabilities": {"continue": 0.5, "replan": 0.5}, "note": "x"}')
+
+
+def test_system1_bad_probability_values_are_errors() -> None:
+    with pytest.raises(ModelOutputError, match="不能是 bool 或字符串"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": true, "replan": 0.0, "rethink": 0.0}, "note": "x"}'
+        )
+    with pytest.raises(ModelOutputError, match="不能是 bool 或字符串"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": "0.5", "replan": 0.5, "rethink": 0.0}, "note": "x"}'
+        )
+    with pytest.raises(ModelOutputError, match="必须在 0..1"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": 1.5, "replan": 0.0, "rethink": 0.0}, "note": "x"}'
+        )
+    with pytest.raises(ModelOutputError, match="必须在 0..1"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": -0.1, "replan": 0.6, "rethink": 0.5}, "note": "x"}'
+        )
+    with pytest.raises(ModelOutputError, match="非有限常量|必须是有限数值"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": NaN, "replan": 1.0, "rethink": 0.0}, "note": "x"}'
+        )
+    with pytest.raises(ModelOutputError, match="非有限常量|必须是有限数值"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": Infinity, "replan": 0.0, "rethink": 0.0}, "note": "x"}'
+        )
+
+
+def test_system1_sum_and_note_errors() -> None:
+    with pytest.raises(ModelOutputError, match="之和必须约为 1"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": 0.5, "replan": 0.5, "rethink": 0.5}, "note": "x"}'
+        )
+    with pytest.raises(ModelOutputError, match="之和必须为正"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": 0.0, "replan": 0.0, "rethink": 0.0}, "note": "x"}'
+        )
     with pytest.raises(ModelOutputError, match="note 必须是非空字符串"):
-        parse_system1_decision('{"route": "rethink", "note": ""}')
+        parse_system1_tendency(
+            '{"probabilities": {"continue": 1.0, "replan": 0.0, "rethink": 0.0}, "note": ""}'
+        )
     with pytest.raises(ModelOutputError, match="不是合法 JSON"):
-        parse_system1_decision("随便一句话")
+        parse_system1_tendency("随便一句话")
     with pytest.raises(ModelOutputError, match="输出为空"):
-        parse_system1_decision("   ")
+        parse_system1_tendency("   ")
+
+
+def test_system1_duplicate_keys_are_rejected() -> None:
+    with pytest.raises(ModelOutputError, match="重复键"):
+        parse_system1_tendency(
+            '{"probabilities": {"continue": 0.5, "continue": 0.5, "replan": 0.5}, "note": "x"}'
+        )
+
+
+def test_system1_route_policy_validates_thresholds() -> None:
+    assert System1RoutePolicy().certainty_threshold == 0.75
+    assert System1RoutePolicy().margin_threshold == 0.25
+    assert System1RoutePolicy(certainty_threshold=0.9, margin_threshold=0.1) == (
+        System1RoutePolicy(certainty_threshold=0.9, margin_threshold=0.1)
+    )
+    for bad in (-0.1, 1.1, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            System1RoutePolicy(certainty_threshold=bad)
+    with pytest.raises(ValueError):
+        System1RoutePolicy(margin_threshold=True)  # type: ignore[arg-type]
 
 
 def test_system2_valid_intention_parses() -> None:
@@ -187,7 +282,17 @@ def test_top_level_must_be_object_for_system2() -> None:
 
 def test_frozen_results_reject_construction_errors() -> None:
     with pytest.raises(ModelOutputError):
-        System1Decision(route=System1Route.RETHINK, note="")
+        System1Tendency(probabilities={System1Route.CONTINUE: 1.0}, note="", total=1.0)
+    with pytest.raises(ModelOutputError):
+        System1Tendency(
+            probabilities={
+                System1Route.CONTINUE: float("nan"),
+                System1Route.REPLAN: 0.0,
+                System1Route.RETHINK: 0.0,
+            },
+            note="x",
+            total=0.0,
+        )
     with pytest.raises(ModelOutputError):
         System2Intention(intention="")
     with pytest.raises(ModelOutputError):

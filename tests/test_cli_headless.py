@@ -14,6 +14,8 @@ from sceneweave.app.assembly import build_scripted_factory
 from sceneweave.app.runner import run_headless
 from sceneweave.config.loader import load_assembly_config
 
+from .fakes import s1_continue, s1_rethink
+
 
 def setup_config(tmp_path: Path) -> Path:
     scene = {
@@ -48,14 +50,16 @@ def setup_config(tmp_path: Path) -> Path:
 SCRIPTS = {
     "role:lin": {
         "system1": [
-            '{"route": "rethink", "note": "开始行动"}',
+            s1_rethink("开始行动"),
         ]
-        + ['{"route": "continue", "note": "继续"}'] * 10,
+        + [s1_continue("继续")] * 10,
         "system2": ['{"intention": "走到书桌旁"}'],
         "system3": ['[{"kind": "move", "destination": {"entity": "书桌"}, "mode": "walk"}]'],
     },
     "role:shen": {
-        "system1": ['{"route": "continue", "note": "照旧"}'] * 11,
+        "system1": [s1_rethink("先观察并接受空计划")] + [s1_continue("照旧")] * 10,
+        "system2": ['{"intention": "先观察，不主动行动"}'],
+        "system3": ["[]"],
     },
     "translator:lin": {
         "translator": [

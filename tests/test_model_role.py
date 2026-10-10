@@ -40,10 +40,10 @@ from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.translation import ActionSchedule, PlanAcceptance
 from sceneweave.roles.model_role import ModelRole
 
-from .fakes import ScriptedSampler, rid
+from .fakes import ScriptedSampler, rid, s1_continue, s1_rethink
 
-S1_SKIP = '{"route": "continue", "note": "一切照旧"}'
-S1_GO = '{"route": "rethink", "note": "情况有变"}'
+S1_SKIP = s1_continue("一切照旧")
+S1_GO = s1_rethink("情况有变")
 S2 = '{"intention": "拿到抽屉里的钥匙"}'
 S2_OTHER = '{"intention": "改去找备用钥匙"}'
 S3_GRASP = '[{"kind": "grasp", "target": "key", "effector": "right_hand"}]'
@@ -372,6 +372,7 @@ def test_explicit_empty_plan_is_legal_and_not_leftover() -> None:
         first = await role.perceive(turn())
         assert first.actions == ()
         assert first.plan is not None and first.plan.is_empty
+        await save_plan(role, first, [])
         second = await role.perceive(turn(cycle="cycle-2"))
         assert second.actions == ()
 
@@ -380,14 +381,23 @@ def test_explicit_empty_plan_is_legal_and_not_leftover() -> None:
 
 def test_system1_updates_cognition_only() -> None:
     async def scenario() -> None:
-        sampler = ScriptedSampler({"system1": [S1_SKIP]})
+        # 首次没有意向/计划：结构强制 rethink，先等待并接受空计划作为初始化，
+        # 之后再测 continue 仅更新认知。
+        sampler = ScriptedSampler(
+            {
+                "system1": [s1_rethink("等待并接受空计划")],
+                "system2": ['{"intention": "先观察，不主动行动"}'],
+                "system3": ["[]"],
+            }
+        )
         role = ModelRole(rid("lin"), sampler, max_memory=2)
-        await role.perceive(turn())
-        assert role.memory_notes() == ("一切照旧",)
-        sampler.script["system1"] = ['{"route": "continue", "note": "又一条"}']
+        first = await role.perceive(turn())
+        await save_plan(role, first, [])
+        assert role.memory_notes() == ("等待并接受空计划",)
+        sampler.script["system1"] = [s1_continue("又一条")]
         await role.perceive(turn(cycle="cycle-2"))
-        assert role.memory_notes() == ("一切照旧", "又一条")
-        sampler.script["system1"] = ['{"route": "continue", "note": "第三条"}']
+        assert role.memory_notes() == ("等待并接受空计划", "又一条")
+        sampler.script["system1"] = [s1_continue("第三条")]
         await role.perceive(turn(cycle="cycle-3"))
         assert role.memory_notes() == ("又一条", "第三条")
 
@@ -457,7 +467,7 @@ def test_perceive_rejected_serialized_by_role_lock() -> None:
     async def scenario() -> None:
         gate = asyncio.Event()
         sampler = ScriptedSampler(
-            {"system1": [S1_SKIP, S1_GO], "system2": [S2], "system3": [S3_GRASP]},
+            {"system1": [S1_GO, S1_GO], "system2": [S2, S2], "system3": [S3_GRASP, S3_GRASP]},
             gate=gate,
         )
         role = ModelRole(rid("lin"), sampler)
@@ -546,6 +556,8 @@ def test_response_identity_allocated_before_stages_and_logged() -> None:
         redo_s3 = [r for r in grouped["system3.declare"] if r["response_id"] == "r-lin-2"]
         assert redo_s3, "打回只重调 System3，使用新响应身份"
         assert all(r["response_id"] in {"r-lin-1", "r-lin-2"} for r in grouped["system1.decide"])
+        # 保存打回后重做的候选，使后续 continue 合法。
+        await save_plan(role, second, [(str(second.actions[0].action_id), 100, 200)])
         sampler.script["system1"] = [S1_SKIP]
         skipped = await role.perceive(turn(cycle="cycle-2"))
         grouped = records_by_stage()
@@ -574,15 +586,28 @@ def test_failed_rejection_invalidates_consumed_feedback() -> None:
 
 def test_logging_failure_is_visible_and_preserves_model_error() -> None:
     class BrokenTracer:
+        """所有写入都失败：成功的请求日志失败要暴露。"""
+
         def trace(self, record) -> None:
             raise RuntimeError("日志不可写")
 
+    class ErrorLogBrokenTracer:
+        """只拒绝错误日志写入：不能掩盖原始模型/解析异常。"""
+
+        def trace(self, record) -> None:
+            if record.error is not None:
+                raise RuntimeError("错误日志不可写")
+
     async def scenario() -> None:
+        # 正常请求阶段日志写入失败：直接暴露，不静默吞掉。
         role = ModelRole(rid("lin"), ScriptedSampler({"system1": [S1_SKIP]}), tracer=BrokenTracer())
         with pytest.raises(RuntimeError, match="日志不可写"):
             await role.perceive(turn())
+        # 模型输出错误时错误日志写入失败：原始解析异常保留，日志失败只告警。
         role = ModelRole(
-            rid("lin"), ScriptedSampler({"system1": ["坏 JSON"]}), tracer=BrokenTracer()
+            rid("lin"),
+            ScriptedSampler({"system1": ["坏 JSON"]}),
+            tracer=ErrorLogBrokenTracer(),
         )
         with pytest.warns(RuntimeWarning, match="错误日志写入失败"):
             with pytest.raises(ValueError, match="不是合法 JSON"):

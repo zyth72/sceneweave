@@ -6,10 +6,11 @@ domain/world/engine 只依赖本模块的接口，不依赖具体日志实现；
 不可变元组，不嵌套可变消息。
 """
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Protocol
+from typing import Any, Protocol
 
 from sceneweave.domain.identity import (
     ActionId,
@@ -24,7 +25,63 @@ from sceneweave.domain.identity import (
 )
 from sceneweave.domain.time import SimulationTime, validate_simulation_time
 
-type TraceValue = str | int | bool | None
+# 追踪细节只接受可无损编码为 JSON 的安全值：标量与递归的字符串键映射/序列。
+# 这样分布、阈值等 float 与嵌套结构可以原样进入结构化日志，供 UI 读取；
+# 非有限数值与不可 JSON 化的对象一律拒绝。递归别名由类型检查器惰性求值。
+type TraceValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | tuple[TraceValue, ...]
+    | list[TraceValue]
+    | Mapping[str, TraceValue]
+)
+
+
+def _freeze_trace_value(value: Any, path: str) -> TraceValue:
+    """递归校验并复制追踪细节值；非有限数值与不支持类型明确报错。
+
+    返回的嵌套结构是全新副本：映射冻结为只读映射、序列冻结为元组，
+    调用方之后修改原对象不会影响已记录内容。日志接入层使用
+    trace_details_to_json 生成独立的 JSON 投影，不暴露内部可变容器。
+    """
+    if value is None or type(value) is bool:
+        return value
+    if type(value) is int:
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError(f"追踪细节不接受非有限数值：{path}={value!r}")
+        return value
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        frozen: dict[str, TraceValue] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError(f"追踪细节键必须是非空字符串：{path}")
+            frozen[key] = _freeze_trace_value(item, f"{path}.{key}")
+        return MappingProxyType(frozen)
+    if isinstance(value, (list, tuple)):
+        return tuple(
+            _freeze_trace_value(item, f"{path}[{index}]") for index, item in enumerate(value)
+        )
+    raise ValueError(f"追踪细节值类型不支持：{type(value).__name__}（{path}）")
+
+
+def _trace_value_to_json(value: TraceValue) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _trace_value_to_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_trace_value_to_json(item) for item in value]
+    return value
+
+
+def trace_details_to_json(details: Mapping[str, TraceValue]) -> dict[str, Any]:
+    """把不可变追踪细节复制为 JSON 容器，供日志适配与报告使用。"""
+    return {key: _trace_value_to_json(value) for key, value in details.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +92,8 @@ class TraceRecord:
     链检索；event_ids 是触发来源，inputs/outputs 是本轮感知与行动
     输出的文本快照；world_state_version 记录检查所依据的共同状态；
     related_response_id 表达打回与重试之间的新旧响应关系。details
-    只接受可无损记录的标量值并冻结为只读映射。
+    只接受可无损记录的 JSON 安全值（标量、float 与递归的字符串键
+    映射/序列），并复制冻结为只读映射。
     """
 
     stage: str
@@ -85,9 +143,7 @@ class TraceRecord:
         for key, value in self.details.items():
             if not isinstance(key, str) or not key:
                 raise ValueError("追踪细节键必须是非空字符串")
-            if value is not None and not isinstance(value, (str, int)):
-                raise ValueError(f"追踪细节值类型不支持：{type(value).__name__}")
-            copied[key] = value
+            copied[key] = _freeze_trace_value(value, key)
         object.__setattr__(self, "details", MappingProxyType(copied))
         if self.error is not None and (not isinstance(self.error, str) or not self.error):
             raise ValueError("错误信息必须是非空字符串或 None")

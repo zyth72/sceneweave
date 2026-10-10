@@ -90,6 +90,16 @@ PAGE = """<!DOCTYPE html>
   .call.skip { background: #f7f8fa; }
   .call-head { font-size: .87rem; font-weight: 600; overflow-wrap: anywhere; }
   .call-summary { font-size: .85rem; margin-top: .18rem; overflow-wrap: anywhere; }
+  .s1-bars { display: grid; gap: .25rem; margin: .4rem 0; }
+  .s1-row { display: grid; grid-template-columns: 5.5rem 1fr 3rem; align-items: center;
+            gap: .45rem; font-size: .8rem; }
+  .s1-row .track { background: #e8ecf1; border-radius: 999px; height: .72rem;
+                   overflow: hidden; border: 1px solid var(--line); }
+  .s1-row .s1-fill { height: 100%; background: var(--blue); }
+  .s1-row .s1-fill.replan { background: #b7791f; }
+  .s1-row .s1-fill.rethink { background: var(--red); }
+  .s1-row .pct { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .s1-route { font-weight: 600; margin: .35rem 0 .1rem; }
   .call-meta { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
   .filters { display: flex; gap: .8rem; flex-wrap: wrap; align-items: center;
              margin-bottom: .5rem; }
@@ -570,6 +580,90 @@ function cycleNode(data, open) {
   return details;
 }
 
+const S1_ROUTE_ORDER = ["continue", "replan", "rethink"];
+
+function pctText(value) {
+  // 数值百分比：整数去尾零，供条宽、标签与导出使用；纯数值来自服务端。
+  if (typeof value !== "number" || !isFinite(value)) return "—";
+  const text = (value * 100).toFixed(2).replace(/(\\.\\d+?)0+$/, "$1").replace(/\\.0+$/, "");
+  return text + "%";
+}
+
+function system1Bars(weights, caption) {
+  // 三路百分比条：数值只来自服务端已校验的结构字段，宽度按数值设置，
+  // 全程 textContent / style，不注入 HTML。
+  const wrap = element("div", "s1-bars");
+  if (caption) wrap.appendChild(element("div", "muted", caption));
+  for (const route of S1_ROUTE_ORDER) {
+    const raw = weights ? weights[route] : undefined;
+    const value = (typeof raw === "number" && isFinite(raw)) ? Math.max(0, Math.min(1, raw)) : 0;
+    const row = element("div", "s1-row");
+    row.appendChild(element("span", null, route));
+    const track = element("div", "track");
+    const fill = element("div", "s1-fill");
+    fill.classList.add(route);
+    fill.style.width = pctText(value);
+    track.appendChild(fill);
+    row.appendChild(track);
+    row.appendChild(element("span", "pct", pctText(value)));
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+function system1PolicySummary(item) {
+  // 程序 trace 才是实际路由与选择依据的来源；绝不从分布反推一个 route。
+  const data = item.details || {};
+  const parts = [
+    "路由 " + (typeof data.route === "string" ? data.route : "—"),
+    "方式 " + (typeof data.method === "string" ? data.method : "—"),
+    "原因 " + (typeof data.reason === "string" ? data.reason : "—"),
+  ];
+  const legal = data.legal_weights;
+  if (legal && typeof legal === "object") {
+    parts.push("程序实际权重 " + S1_ROUTE_ORDER.map(function (route) {
+      return route + " " + pctText(legal[route]);
+    }).join(" / "));
+  }
+  const raw = data.raw_probabilities;
+  if (raw && typeof raw === "object") {
+    parts.push("模型原始倾向 " + S1_ROUTE_ORDER.map(function (route) {
+      return route + " " + pctText(raw[route]);
+    }).join(" / "));
+  }
+  if (typeof data.certainty_threshold === "number") {
+    parts.push("确定阈值 " + pctText(data.certainty_threshold));
+  }
+  if (typeof data.margin_threshold === "number") parts.push("边际阈值 " + pctText(data.margin_threshold));
+  if (typeof data.random_value === "number") {
+    parts.push("随机抽值 " + data.random_value + "（种子 " + data.route_seed + "）");
+  }
+  if (typeof data.note === "string" && data.note) parts.push("说明 " + data.note);
+  return parts.join("；");
+}
+
+function system1PolicyBlock(item) {
+  const data = item.details || {};
+  const block = element("div");
+  const legal = data.legal_weights;
+  if (legal && typeof legal === "object") {
+    block.appendChild(system1Bars(legal, "程序实际使用的合法归一化权重"));
+  }
+  const route = typeof data.route === "string" ? data.route : "—";
+  const method = typeof data.method === "string" ? data.method : "—";
+  const reason = typeof data.reason === "string" ? data.reason : "—";
+  block.appendChild(element("p", "s1-route",
+    "最终路由：" + route + "（选择方式 " + method + "；原因 " + reason + "）"));
+  const bits = [];
+  if (Array.isArray(data.allowed_routes)) bits.push("允许路径 " + data.allowed_routes.join("/"));
+  if (typeof data.max_weight === "number") bits.push("最大权重 " + pctText(data.max_weight));
+  if (typeof data.margin === "number") bits.push("领先幅度 " + pctText(data.margin));
+  if (typeof data.random_value === "number") bits.push("随机抽值 " + data.random_value);
+  if (typeof data.route_seed === "number") bits.push("route_seed " + data.route_seed);
+  if (bits.length) block.appendChild(element("p", "muted", bits.join(" · ")));
+  return block;
+}
+
 function fillFilter(selectId, values) {
   const select = document.getElementById(selectId);
   const previous = select.value;
@@ -627,6 +721,8 @@ function callNode(item, open) {
   if (item.kind === "call") {
     head.textContent = (item.is_error ? "模型调用失败" : "模型调用") +
       " · " + item.phase + " · " + item.group;
+  } else if (item.is_policy) {
+    head.textContent = "程序路由决策 · " + item.phase + " · " + item.group;
   } else {
     head.textContent = (item.is_skip ? "未调用模型（跳过）" : "阶段错误") +
       " · " + item.phase + " · " + item.group;
@@ -635,6 +731,7 @@ function callNode(item, open) {
   const parts = [];
   if (item.scope) parts.push("作用域 " + item.scope);
   if (item.role_id) parts.push("角色 " + item.role_id);
+  if (item.response_id) parts.push("响应 " + item.response_id);
   if (item.cycle_id) parts.push("周期 " + item.cycle_id);
   if (typeof item.simulation_time_ms === "number") {
     parts.push("剧情时刻 " + item.simulation_time_ms + " ms");
@@ -642,6 +739,13 @@ function callNode(item, open) {
   node.appendChild(element("div", "call-meta", parts.join(" · ")));
   if (item.summary_text) {
     node.appendChild(element("div", "call-summary", item.summary_text));
+  }
+  if (item.kind === "call" && item.phase === "system1" && item.distribution) {
+    // 模型调用的三条百分比条只展示模型自报倾向，不据此推断 route。
+    node.appendChild(system1Bars(item.distribution, "模型倾向（原始，未校准）"));
+  }
+  if (item.kind === "note" && item.is_policy) {
+    node.appendChild(system1PolicyBlock(item));
   }
   const details = element("details");
   details.dataset.entryIndex = String(item.entry_index);
@@ -665,7 +769,8 @@ function callNode(item, open) {
     const detailKeys = Object.keys(item.details || {});
     if (detailKeys.length) {
       details.appendChild(preBlock("阶段细节", detailKeys.map(function (key) {
-        return key + ": " + item.details[key];
+        const value = item.details[key];
+        return key + ": " + (typeof value === "string" ? value : JSON.stringify(value));
       }).join("\\n")));
     }
     if (item.error) details.appendChild(preBlock("错误", item.error));
@@ -1051,12 +1156,22 @@ function buildProcessMarkdown() {
     lines.push(callItems.length ? "当前筛选下没有模型调用记录。" : "暂无模型调用记录。");
   }
   for (const item of filtered) {
-    const label = item.kind === "call"
-      ? "模型调用"
-      : (item.is_skip ? "未调用（跳过）" : "阶段错误");
+    let label;
+    let body;
+    if (item.kind === "call") {
+      label = "模型调用";
+      body = item.summary_text || "";
+    } else if (item.is_policy) {
+      // 程序 trace 的路由与依据进入导出，让审计看到实际选择而非只模型倾向。
+      label = "程序路由决策";
+      body = system1PolicySummary(item);
+    } else {
+      label = item.is_skip ? "未调用（跳过）" : "阶段错误";
+      body = item.summary_text || "";
+    }
     lines.push(markdownLines(label + " · " + item.phase + " · " + (item.group || "—") +
       " · " + (typeof item.simulation_time_ms === "number"
-        ? item.simulation_time_ms + " ms" : "—") + "：" + (item.summary_text || ""), "- "));
+        ? item.simulation_time_ms + " ms" : "—") + "：" + body, "- "));
   }
   lines.push("", "## 最终状态", "");
   for (const line of finalStateMarkdown(snapshot.final)) {

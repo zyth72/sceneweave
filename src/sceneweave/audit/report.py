@@ -15,7 +15,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from sceneweave.domain.tracing import TraceRecord
+from sceneweave.domain.tracing import TraceRecord, trace_details_to_json
 from sceneweave.world.scene import SceneObject
 
 _PROMPT_INVOKE_SUFFIX = ".invoke"
@@ -232,9 +232,8 @@ def _record_text(record: TraceRecord) -> str:
     if record.outputs:
         parts.append("输出：" + " | ".join(record.outputs))
     if record.details:
-        parts.append(
-            "细节：" + "；".join(f"{key}={record.details[key]}" for key in sorted(record.details))
-        )
+        details = trace_details_to_json(record.details)
+        parts.append("细节：" + "；".join(f"{key}={details[key]}" for key in sorted(details)))
     if record.error:
         parts.append("错误：" + record.error)
     return "。".join(parts)

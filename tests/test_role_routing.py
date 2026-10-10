@@ -32,11 +32,20 @@ from sceneweave.engine.config import RunConfig
 from sceneweave.engine.scheduler import RunStopReason, Scheduler
 from sceneweave.roles.model_role import ModelRole
 
-from .fakes import FakeSemanticWorld, ScriptedSampler, ScriptedTranslator, ms, rid
+from .fakes import (
+    FakeSemanticWorld,
+    ScriptedSampler,
+    ScriptedTranslator,
+    ms,
+    rid,
+    s1_continue,
+    s1_replan,
+    s1_rethink,
+)
 
-S1_CONTINUE = '{"route": "continue", "note": "照旧"}'
-S1_REPLAN = '{"route": "replan", "note": "换做法"}'
-S1_RETHINK = '{"route": "rethink", "note": "重新决定"}'
+S1_CONTINUE = s1_continue("照旧")
+S1_REPLAN = s1_replan("换做法")
+S1_RETHINK = s1_rethink("重新决定")
 S2_A = '{"intention": "拿到钥匙"}'
 S2_B = '{"intention": "改找备用钥匙"}'
 S3_GRASP = '[{"kind": "grasp", "target": "key", "effector": "right_hand"}]'
