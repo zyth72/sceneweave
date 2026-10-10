@@ -164,6 +164,119 @@ def test_cases_file_has_twelve_states_across_three_suites() -> None:
     assert len([c for c in cases if c.suite == "unconfirmed"]) == 3
 
 
+def test_report_contains_scenario_exact_prompts_and_each_response(tmp_path: Path) -> None:
+    case = sens.SensCase(
+        "evidence",
+        "intensity",
+        "指定收件人移动",
+        "收件人仍在房间",
+        "交付信封",
+        ("a1 走到位置",),
+        ("a1 registered",),
+        ("已约定交付",),
+        (),
+        "不设固定标签",
+    )
+    samples = [
+        _sample(
+            case.id,
+            case.suite,
+            "baseline",
+            repeat,
+            {"continue": 0.8, "replan": 0.1, "rethink": 0.1},
+        )
+        for repeat in range(2)
+    ]
+    prompt = "实际发出的文本\n```原文包含围栏```\n不能重新构造"
+    for sample in samples:
+        sample.prompt = prompt
+        sample.text = f'{{"raw": "第{sample.repeat}次响应"}}'
+        sample.note = f"第{sample.repeat}次解释"
+        sample.session_ids = [f"session-{sample.repeat}"]
+    sens.write_report(
+        outdir=tmp_path,
+        samples=samples,
+        personas=_personas()[:1],
+        cases=[case],
+        model="m",
+        suite="all",
+        repeats=2,
+        seed=1,
+    )
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+    for text in (
+        case.title,
+        case.event,
+        case.intention,
+        *case.plan,
+        *case.known_actions,
+        *case.memory,
+        case.label_rationale,
+    ):
+        assert text in report
+    assert report.count(prompt) == 1, "逐字相同的提示词才允许合并展示"
+    assert f"````text\n{prompt}\n````" in report
+    for sample in samples:
+        assert sample.text in report
+        assert sample.note in report
+        assert sample.session_ids[0] in report
+        assert sample.task_id in report
+    samples[1].prompt = "另一个实际提示词"
+    samples[1].parse_ok = False
+    samples[1].parse_error = "结构错误但不能隐藏响应"
+    sens.write_report(
+        outdir=tmp_path,
+        samples=samples,
+        personas=_personas()[:1],
+        cases=[case],
+        model="m",
+        suite="all",
+        repeats=2,
+        seed=1,
+    )
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert samples[0].prompt in report and samples[1].prompt in report
+    assert samples[1].text in report and samples[1].parse_error in report
+
+
+def test_offline_report_uses_saved_inputs_without_source_reads_or_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert (
+        _run_main(
+            monkeypatch,
+            tmp_path,
+            (0, 1.0, False, _events_stdout(_GOOD_DISTRIBUTION), "", None),
+            "saved",
+        )
+        == 0
+    )
+    outdir = tmp_path / "saved"
+    manifest_path = outdir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cases"][0]["event"] = "保存的历史事件，不在当前用例文件里"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    paths = [manifest_path, outdir / "samples.jsonl"]
+    before = [path.read_bytes() for path in paths]
+    old_summary = json.loads((outdir / "summary.json").read_text(encoding="utf-8"))
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("离线导出不允许读取当前来源、初始化 agent 或调用模型")
+
+    monkeypatch.setattr(sens, "load_cases", forbidden)
+    monkeypatch.setattr(sens, "load_persona", forbidden)
+    monkeypatch.setattr(sens.routing, "run_one", forbidden)
+    monkeypatch.setattr(sens.routing, "ensure_agent_dir", forbidden)
+    assert sens.main(["--report-from", str(outdir)]) == 0
+    assert [path.read_bytes() for path in paths] == before
+    assert json.loads((outdir / "summary.json").read_text(encoding="utf-8")) == old_summary
+    report = (outdir / "report.md").read_text(encoding="utf-8")
+    assert manifest["cases"][0]["event"] in report
+    for record in map(json.loads, before[1].decode().splitlines()):
+        assert record["prompt"] in report
+        assert record["text"] in report
+
+
 def test_intensity_series_changes_only_the_event() -> None:
     cases = [c for c in sens.load_cases() if c.suite == "intensity"]
     base = cases[0]

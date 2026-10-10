@@ -104,10 +104,25 @@ uv run --locked python scripts/probe_system1_sensitivity.py
 `--repeats`、`--limit`、`--model`、`--agent`、`--opencode`、`--workdir`、`--persona-dir`、`--output-dir`、
 `--usage-db`、`--no-db-usage`、`--timeout`、`--seed`、`--no-thinking`、`--dry-run`、`--smoke`。
 
+已有记录可离线重导出 Markdown，无需重新调用模型，也不读取当前人格仓库或用例文件：
+
+```bash
+uv run --locked python scripts/probe_system1_sensitivity.py \
+  --report-from sceneweave-runs/system1-sensitivity/20261010-corrected
+```
+
+此命令只更新 `report.md` 和派生统计 `summary.json`，保留原始 `manifest.json`、`samples.jsonl`。
+历史场景来自保存的 manifest，提示词和输出来自逐次记录，不按当前模板重建。未保存的 OpenCode／供应商
+附加系统提示不在记录范围内，不能把 CLI 输入文本等同于完整供应商请求。
+
 输出默认写入忽略目录 `sceneweave-runs/system1-sensitivity/<timestamp>/`：`manifest.json`（完整的受控用例：
 事件/意向/计划/已知行动状态/认知/离线期望与理由，以及模型/suite/repeats/seed/timeout 等参数和用例文件、
 脚本与人格来源的 sha256）、`samples.jsonl`（完整 prompt/原始 response/events/model/sessionID/usage/耗时/error）、
-`summary.json`、`report.md`。报告按 profile 与 suite 都列出耗时 median/p95、tokens（含 cache）与 cost、
+`summary.json`、`report.md`。Markdown 首先提供场景目录、人格摘录与来源、每个场景的完整事件／意向／保存计划／
+已知行动状态／记忆，以及各人格实际完整提示词、全部重复的原始响应、note、保存的 reasoning、task/session ID、
+实际调用顺序及失败信息。提示词仅在同场景同人格的重复间逐字一致时合并展示；不同提示词分别列出。
+合成场景与真实人格来源分开说明，不补写未提供的剧情时刻或空间事实，离线参考标签明确标为未发给模型。
+报告按 profile 与 suite 都列出耗时 median/p95、tokens（含 cache）与 cost、
 usage 覆盖；给出**逐 profile 的 6 级趋势**（不只看混合全部 profile 的池化），并同时给出实际/有效/预期样本覆盖
 与分组缺失记录；同状态重复波动用每路径 **max-min（全重复范围）**，基线差与两侧范围同屏比较；含邻级与同强度
 不同层比较、逐条错误。输出目录非空时拒绝覆写混入旧样本；任一调用/schema/工具失败时脚本以非零状态退出。

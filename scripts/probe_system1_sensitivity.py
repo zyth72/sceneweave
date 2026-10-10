@@ -25,9 +25,10 @@ import hashlib
 import json
 import math
 import random
+import re
 import statistics
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -611,8 +612,85 @@ def write_report(
     (outdir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    (outdir / "report.md").write_text(_render_markdown(summary, samples), encoding="utf-8")
+    report = _render_markdown(summary, samples, cases, personas)
+    manifest_path = outdir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        provenance = {
+            "说明": "运行当时保存的参数与源码哈希；不代表本次重导出的生成器版本",
+            "实验参数": {
+                key: value
+                for key, value in manifest.items()
+                if key not in ("cases", "personas", "source_hashes")
+            },
+            "运行时源码": manifest.get("source_hashes"),
+            "原始记录文件sha256": {
+                name: hashlib.sha256((outdir / name).read_bytes()).hexdigest()
+                for name in ("manifest.json", "samples.jsonl")
+                if (outdir / name).exists()
+            },
+        }
+        report += (
+            "\n## 实验记录来源\n\n"
+            + _fenced(json.dumps(provenance, ensure_ascii=False, indent=2), "json")
+            + "\n"
+        )
+    (outdir / "report.md").write_text(report, encoding="utf-8")
     return summary
+
+
+def regenerate_report(outdir: Path) -> dict[str, Any]:
+    """只用保存的实验输入输出重导出，不访问模型、人格仓库或当前用例文件。"""
+    manifest = json.loads((outdir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest["probe"] != "independent-system1-sensitivity":
+        raise ValueError("该目录不是 System1 敏感度探针记录")
+    cases = [
+        SensCase(
+            **{
+                **item,
+                **{
+                    key: tuple(item[key])
+                    for key in ("plan", "known_actions", "memory", "expected_routes")
+                },
+            }
+        )
+        for item in manifest["cases"]
+    ]
+    personas = [
+        PersonaExcerpt(
+            label=item["label"],
+            real_name=item["real_name"],
+            source_path=item["source_path"],
+            sha256=item["sha256"],
+            fields=(),  # 展示直接用已保存的摘录；不从当前源文件重新抽取。
+            text=item["text"],
+        )
+        for item in manifest["personas"]
+    ]
+    sample_fields = {item.name for item in fields(SensSample)}
+    samples = []
+    for line in (outdir / "samples.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        values = {key: value for key, value in record.items() if key in sample_fields}
+        values["expected_routes"] = tuple(record["expected_routes"])
+        values["usage"] = (
+            {"cost": record["cost"], "tokens": record["tokens"]}
+            if record["usage_available"]
+            else None
+        )
+        samples.append(SensSample(**values))
+    return write_report(
+        outdir=outdir,
+        samples=samples,
+        personas=personas,
+        cases=cases,
+        model=manifest["model"],
+        suite=manifest["suite_filter"],
+        repeats=manifest["repeats"],
+        seed=manifest["seed"],
+    )
 
 
 def _intensity_trend(
@@ -732,7 +810,169 @@ def _repeat_fluctuation(samples: list[SensSample]) -> dict[str, Any]:
     return rows
 
 
-def _render_markdown(summary: dict[str, Any], samples: list[SensSample]) -> str:
+def _fenced(text: str, language: str = "text") -> str:
+    """保留原文；输入中的 Markdown 围栏不能提前结束原文块。"""
+    longest = max((len(match) for match in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}{language}\n{text}\n{fence}"
+
+
+def _render_evidence(
+    cases: list[SensCase], personas: list[PersonaExcerpt], samples: list[SensSample]
+) -> list[str]:
+    lines = [
+        "## 场景、实际提示词与逐次输出",
+        "",
+        "这是合成的单次事件与角色状态探针，结合真实角色的人格摘录；"
+        "不是从角色故事中截取的场景，也没有执行完整模拟。",
+        "当前模拟时刻未单独指定；计划中的起止毫秒是输入原文。未给出的空间、身份或通信条件不补写。",
+        "",
+        "每个场景依次列出：完整状态 → 各人格两次结果对照 → 实际提示词 → 原始响应与解释。"
+        "提示词直接取自每次保存的 `prompt`，不是按当前模板重建；"
+        "它是传给 OpenCode CLI 的文本，未记录的 CLI／供应商附加系统提示不能据此还原。",
+        "参考路由及理由只用于离线分析，不发给模型。r0/r1 对应第1/2次重复，"
+        "调用序号是 samples.jsonl 中的实际记录顺序，重复不保证相邻。",
+        "",
+        "| 场景 | 分组 | 完整输入与结果 |",
+        "| --- | --- | --- |",
+    ]
+    for index, case in enumerate(cases, 1):
+        title = case.title.replace("|", "\\|").replace("\n", " ")
+        lines.append(f"| {index} | {case.suite} | [{title}](#scene-{index}) |")
+    lines += ["", "[跳到汇总统计](#statistics)", "", "### 人格条件及来源", ""]
+    for persona in personas:
+        lines += [
+            f"#### {persona.label}：{persona.real_name or '无额外人格基线'}",
+            "",
+            _fenced(
+                json.dumps(
+                    {
+                        "source_path": persona.source_path,
+                        "source_sha256": persona.sha256,
+                        "text_length": persona.length,
+                        "实际注入的人格摘录": persona.text,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                "json",
+            ),
+            "",
+        ]
+    for index, case in enumerate(cases, 1):
+        lines += [
+            f'<a id="scene-{index}"></a>',
+            "",
+            f"### 场景 {index}：{case.title}",
+            "",
+            f"编号：`{case.id}`；分组：`{case.suite}`。",
+            "",
+            "**完整场景状态（实际实验输入）**",
+            "",
+            _fenced(
+                f"本次事件：{case.event}\n\n当前意向：{case.intention}\n\n"
+                "已保存计划：\n"
+                + ("\n".join(case.plan) or "（空）")
+                + "\n\n已知行动状态：\n"
+                + ("\n".join(case.known_actions) or "（空）")
+                + "\n\n近期记忆：\n"
+                + ("\n".join(case.memory) or "（空）")
+            ),
+            "",
+            "**离线参考（未发给模型）**",
+            "",
+            _fenced(
+                f"允许路由：{', '.join(case.expected_routes) or '不设固定标签'}\n"
+                f"理由：{case.label_rationale}"
+            ),
+            "",
+            "**各条件逐次对照**（c=continue，r=replan，k=rethink；最大倾向仅离线观察）",
+            "",
+            "| 人格 | 重复 | 调用序号 | c / r / k | 最大倾向 | 有效 |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        matches = [(order, s) for order, s in enumerate(samples, 1) if s.case_id == case.id]
+        for order, sample in matches:
+            probs = sample.probabilities
+            values = " / ".join(str(probs[route]) for route in routing.ROUTES) if probs else "n/a"
+            lines.append(
+                f"| {sample.profile_label} | r{sample.repeat} | {order} | {values} | "
+                f"{sample.argmax or 'n/a'} | {'是' if _valid(sample) else '否'} |"
+            )
+        lines.append("")
+        for persona in personas:
+            group = sorted(
+                [(order, s) for order, s in matches if s.profile_label == persona.label],
+                key=lambda item: (item[1].repeat, item[0]),
+            )
+            lines += [f"#### {persona.label}：{persona.real_name or '无额外人格基线'}", ""]
+            if not group:
+                lines += ["缺少调用记录。", ""]
+                continue
+            shared_prompt = len({sample.prompt for _, sample in group}) == 1
+            if shared_prompt:
+                lines += [
+                    "**实际完整提示词**（以下重复的提示词逐字一致，仅展示一次）",
+                    "",
+                    _fenced(group[0][1].prompt),
+                    "",
+                ]
+            for order, sample in group:
+                lines += [
+                    f"**第 {sample.repeat + 1} 次（r{sample.repeat}），调用序号 {order}**",
+                    "",
+                    _fenced(
+                        json.dumps(
+                            {
+                                "task_id": sample.task_id,
+                                "model": sample.model,
+                                "session_ids": sample.session_ids,
+                                "elapsed_seconds": sample.elapsed_seconds,
+                                "exit_code": sample.exit_code,
+                                "timed_out": sample.timed_out,
+                                "call_error": sample.call_error,
+                                "parse_error": sample.parse_error,
+                                "tool_polluted": sample.tool_polluted,
+                                "有效": _valid(sample),
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        "json",
+                    ),
+                    "",
+                ]
+                if not shared_prompt:
+                    lines += ["**本次实际完整提示词**", "", _fenced(sample.prompt), ""]
+                lines += [
+                    "**原始响应**（不改写、不隐藏无效响应）",
+                    "",
+                    _fenced(sample.text),
+                    "",
+                    "**模型解释 note**",
+                    "",
+                    _fenced(sample.note if sample.note is not None else "（未解析出 note）"),
+                    "",
+                ]
+                if sample.reasoning:
+                    lines += [
+                        "<details>",
+                        "<summary>查看本次保存的 reasoning 原文</summary>",
+                        "",
+                        _fenced(sample.reasoning),
+                        "",
+                        "</details>",
+                        "",
+                    ]
+    return lines
+
+
+def _render_markdown(
+    summary: dict[str, Any],
+    samples: list[SensSample],
+    cases: list[SensCase],
+    personas: list[PersonaExcerpt],
+) -> str:
     def fmt(value: Any) -> str:
         if value is None:
             return "n/a"
@@ -775,7 +1015,14 @@ def _render_markdown(summary: dict[str, Any], samples: list[SensSample]) -> str:
         "> 独立 System1 探针：只输出三路倾向分布（事件影响驱动的路径倾向），不是世界事件概率；"
         "argmax 仅离线展示/评分，不抽样、不制定正式路由策略。自称概率未校准；小样本不宣称统计显著。",
         "",
-        "## Profile（角色来源）",
+    ]
+    lines += _render_evidence(cases, personas, samples)
+    lines += [
+        '<a id="statistics"></a>',
+        "",
+        "## 汇总统计",
+        "",
+        "### Profile（角色来源）",
         "",
         "| 编号 | 真实角色 | 抽取文本长度 | 来源 sha256 |",
         "| --- | --- | --- | --- |",
@@ -982,7 +1229,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-thinking", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--report-from", type=Path, help="从已保存目录离线重导出，不调用模型")
     args = parser.parse_args(argv)
+
+    if args.report_from is not None:
+        summary = regenerate_report(args.report_from)
+        print(f"离线报告：{args.report_from / 'report.md'}；样本 {summary['actual_samples']}")
+        return 0
 
     if args.repeats < 1:
         raise SystemExit("--repeats 必须是正整数")
