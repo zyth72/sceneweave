@@ -152,7 +152,7 @@ def run_traced_cycle(
     )
 
     async def scenario() -> None:
-        runner = ResponseRunner([role], CheckingWorld(), tracer=tracer)
+        runner = ResponseRunner([role], tracer=tracer)
         await runner.run_cycle({RoleId("lin_zhou"): turn_input})
 
     asyncio.run(scenario())
@@ -181,8 +181,6 @@ def test_full_cycle_is_recorded_with_searchable_identity_chain() -> None:
         "cycle.start",
         "role.perceive",
         "role.response",
-        "world.check",
-        "role.rejected",
         "cycle.complete",
     } <= stages
     assert log.get_steps() == [0], "同一周期的记录共享同一 step"
@@ -190,17 +188,14 @@ def test_full_cycle_is_recorded_with_searchable_identity_chain() -> None:
     assert lin_entries, "角色记录可按实体检索"
     engine_entries = log.get_entries_by_entity("engine")
     assert {entry.component_name for entry in engine_entries} >= {"cycle.start"}
-    checks = log.get_entries_by_component("world.check")
-    assert len(checks) == 2, "打回后再次检查"
-    first = reconstructed(log, checks[0])
+    responses = log.get_entries_by_component("role.response")
+    assert len(responses) == 1
+    first = reconstructed(log, responses[0])
     assert first["cycle_id"] == "cycle-1"
     assert first["simulation_time_ms"] == 30_000
     assert first["response_id"] == "r-1"
-    assert first["world_state_version"] == 0
-    assert first["details"]["passed"] is False
-    assert first["details"]["reason"] == "客观条件不允许"
     assert first["action_ids"] == ["a-1"]
-    assert first["outputs"] == ["不可能地拉开抽屉"], "检查记录携带实际行动描述"
+    assert first["outputs"] == ["不可能地拉开抽屉"], "响应记录携带实际行动描述"
 
 
 def test_perceive_record_carries_trigger_and_observation_texts() -> None:
@@ -212,8 +207,44 @@ def test_perceive_record_carries_trigger_and_observation_texts() -> None:
     assert data["details"]["introspection"] is False
 
 
+def run_traced_retry(tracer: SimulationLogTracer) -> None:
+    """调度器闭环里的整链检查打回：旧响应被打回、角色返回新完整声明。"""
+    from sceneweave.domain.messages import WorldEvent
+    from sceneweave.engine.config import RunConfig
+    from sceneweave.engine.scheduler import Scheduler
+    from tests.fakes import (
+        FakeSemanticWorld,
+        ScriptedRole,
+        ScriptedTranslator,
+        idle_response,
+        ms,
+        new_action,
+        response,
+    )
+
+    role = ScriptedRole(
+        "lin_zhou",
+        [
+            response("lin_zhou", "r-1", (new_action("a-1", "不可能的行动"),)),
+            response("lin_zhou", "r-2", (new_action("a-2", "先走近书桌"),)),
+        ],
+        fallback=idle_response("lin_zhou"),
+    )
+    scheduler = Scheduler(
+        roles=[role],
+        world=FakeSemanticWorld(["lin_zhou"]),
+        translator=ScriptedTranslator(),
+        config=RunConfig(introspection_interval=ms(10_000), max_duration=ms(10_000)),
+        initial_events=[WorldEvent(EventId("door-opened"), SimulationTime(1_000), "书房门被推开")],
+        tracer=tracer,
+    )
+    asyncio.run(scheduler.run())
+
+
 def test_retry_relation_links_old_and_new_response_ids() -> None:
-    log, _ = traced_log()
+    log = structured_logging.SimulationLog()
+    tracer = SimulationLogTracer(log, wall_clock=lambda: FIXED_CLOCK)
+    run_traced_retry(tracer)
     responses = [
         reconstructed(log, entry) for entry in log.get_entries_by_component("role.response")
     ]
@@ -221,16 +252,18 @@ def test_retry_relation_links_old_and_new_response_ids() -> None:
     retry = next(item for item in responses if item["response_id"] == "r-2")
     assert initial["related_response_id"] is None
     assert retry["related_response_id"] == "r-1", "重试记录关联被打回的旧响应"
-    assert retry["outputs"] == ["先走近书桌"]
-    rejected = reconstructed(log, log.get_entries_by_component("role.rejected")[0])
+    assert retry["outputs"] == ["新增 a-2：先走近书桌"]
+    rejected = reconstructed(log, log.get_entries_by_component("registration.rejected")[0])
     assert rejected["response_id"] == "r-1"
-    assert rejected["details"]["reason"] == "客观条件不允许"
+    assert "客观条件不允许" in rejected["details"]["reason"]
 
 
 def test_records_are_searchable_along_the_identity_chain() -> None:
-    log, _ = traced_log()
+    log = structured_logging.SimulationLog()
+    tracer = SimulationLogTracer(log, wall_clock=lambda: FIXED_CLOCK)
+    run_traced_retry(tracer)
     interface = AIAgentLogInterface(log)
-    found = interface.filter_entries(component_name="role.rejected", include_content=True)
+    found = interface.filter_entries(component_name="registration.rejected", include_content=True)
     assert found
     data = found[0]["data"]
     assert data["cycle_id"] == "cycle-1"
@@ -283,7 +316,7 @@ def test_empty_action_set_is_logged_explicitly() -> None:
     role = WithdrawingRole()
 
     async def scenario() -> None:
-        await ResponseRunner([role], CheckingWorld(), tracer=tracer).run_cycle(
+        await ResponseRunner([role], tracer=tracer).run_cycle(
             {
                 RoleId("lin_zhou"): TurnInput(
                     CycleId("cycle-1"),
@@ -309,15 +342,14 @@ def test_role_error_keeps_identity_and_original_exception() -> None:
     log = structured_logging.SimulationLog()
     tracer = SimulationLogTracer(log, wall_clock=lambda: FIXED_CLOCK)
 
-    class FailingAfterRejected(RetryingRole):
-        async def rejected(self, feedback: Any) -> RoleResponse:
-            self.rejections += 1
+    class FailingRole(RetryingRole):
+        async def perceive(self, turn_input: TurnInput) -> RoleResponse:
             raise RuntimeError("内部思考失败")
 
-    role = FailingAfterRejected()
+    role = FailingRole()
 
     async def scenario() -> None:
-        await ResponseRunner([role], CheckingWorld(), tracer=tracer).run_cycle(
+        await ResponseRunner([role], tracer=tracer).run_cycle(
             {
                 RoleId("lin_zhou"): TurnInput(
                     CycleId("cycle-1"),
@@ -333,8 +365,8 @@ def test_role_error_keeps_identity_and_original_exception() -> None:
     errors = log.get_entries_by_component("role.error")
     assert errors, "角色错误必须留痕"
     data = reconstructed(log, errors[0])
-    assert data["response_id"] == "r-1", "错误保留当前响应身份"
-    assert data["action_ids"] == ["a-1"]
+    assert data["cycle_id"] == "cycle-1"
+    assert data["role_id"] == "lin_zhou"
     assert "RuntimeError" in data["error"]
     assert "内部思考失败" in data["error"]
     cycle_errors = log.get_entries_by_component("cycle.error")
@@ -343,32 +375,15 @@ def test_role_error_keeps_identity_and_original_exception() -> None:
 
 
 def test_cycle_error_and_cancellation_leave_traces() -> None:
-    class SilentDriftWorld(CheckingWorld):
-        """检查通过后悄悄推进版本，触发周期结束时的漂移检测。"""
-
-        def __init__(self) -> None:
-            self._v = 0
-            self.checks = 0
-
-        @property
-        def state_version(self) -> WorldStateVersion:
-            return WorldStateVersion(self._v)
-
-        async def check_response(
-            self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
-        ) -> ActionCheckResult:
-            self.checks += 1
-            result = await super().check_response(candidate, arrangements=arrangements)
-            if self.checks > 1:
-                self._v = 1
-            return result
-
     log = structured_logging.SimulationLog()
     tracer = SimulationLogTracer(log, wall_clock=lambda: FIXED_CLOCK)
 
+    class BrokenRole(RetryingRole):
+        async def perceive(self, turn_input: TurnInput) -> RoleResponse:
+            raise RuntimeError("周期处理失败")
+
     async def scenario() -> None:
-        role = RetryingRole()
-        await ResponseRunner([role], SilentDriftWorld(), tracer=tracer).run_cycle(
+        await ResponseRunner([BrokenRole()], tracer=tracer).run_cycle(
             {
                 RoleId("lin_zhou"): TurnInput(
                     CycleId("cycle-1"),
@@ -379,12 +394,12 @@ def test_cycle_error_and_cancellation_leave_traces() -> None:
             }
         )
 
-    with pytest.raises(RuntimeError, match="共同世界状态版本发生变化"):
+    with pytest.raises(BaseExceptionGroup):
         asyncio.run(scenario())
     cycle_errors = log.get_entries_by_component("cycle.error")
     assert cycle_errors, "周期级错误必须留痕"
     data = reconstructed(log, cycle_errors[0])
-    assert "共同世界状态版本发生变化" in data["error"]
+    assert "周期处理失败" in data["error"]
     assert data["cycle_id"] == "cycle-1"
 
 
@@ -413,7 +428,7 @@ def test_cancelled_sibling_role_leaves_trace() -> None:
             raise AssertionError("不可达")
 
     async def scenario() -> None:
-        runner = ResponseRunner([BrokenRole(), GatedRole()], CheckingWorld(), tracer=tracer)
+        runner = ResponseRunner([BrokenRole(), GatedRole()], tracer=tracer)
         with pytest.raises(BaseExceptionGroup):
             await runner.run_cycle(
                 {
@@ -456,7 +471,7 @@ def test_external_cancellation_records_cycle_and_role_and_preserves_cancelled_er
 
     async def scenario() -> None:
         role = GatedRole()
-        runner = ResponseRunner([role], CheckingWorld(), tracer=tracer)
+        runner = ResponseRunner([role], tracer=tracer)
         task = asyncio.create_task(
             runner.run_cycle(
                 (

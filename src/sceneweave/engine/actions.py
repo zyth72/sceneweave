@@ -10,9 +10,16 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from sceneweave.domain.action_plan import AtomicAction
 from sceneweave.domain.adjudication import ActionOutcome
 from sceneweave.domain.identity import ActionId, CommitGroupId, CycleId, RoleId
-from sceneweave.domain.messages import ActionPhase, ModifiedAction, NewAction, RoleResponse
+from sceneweave.domain.messages import (
+    ActionPhase,
+    ModifiedAction,
+    NewAction,
+    RoleResponse,
+    StepAction,
+)
 from sceneweave.domain.time import SimulationTime, validate_simulation_time
 from sceneweave.domain.translation import (
     ActionArrangement,
@@ -50,6 +57,8 @@ class ActionRecord:
     checkpoints: tuple[SimulationTime, ...]
     registered_cycle: CycleId
     commit_group_id: CommitGroupId | None = None
+    depends_on: tuple[ActionId, ...] = ()
+    action: AtomicAction | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.action_id, str) or not self.action_id:
@@ -78,6 +87,15 @@ class ActionRecord:
             not isinstance(self.commit_group_id, str) or not self.commit_group_id
         ):
             raise ValueError("提交组身份必须是非空字符串或 None")
+        if not isinstance(self.depends_on, tuple):
+            raise ValueError("依赖必须是元组")
+        for item in self.depends_on:
+            if not isinstance(item, str) or not item:
+                raise ValueError("依赖动作身份必须是非空字符串")
+        if len(set(self.depends_on)) != len(self.depends_on):
+            raise ValueError("依赖动作身份必须唯一")
+        if self.action_id in self.depends_on:
+            raise ValueError("动作不能依赖自身")
 
     def arrangement(self) -> ActionArrangement:
         return ActionArrangement(
@@ -153,6 +171,24 @@ def _new_record(
     )
 
 
+def _new_step_record(
+    step: StepAction, schedule: ActionSchedule, cycle_id: CycleId, role_id: RoleId
+) -> ActionRecord:
+    """由结构化当前动作构造登记记录（携带结构化载荷与已解析依赖）。"""
+    return ActionRecord(
+        action_id=step.action_id,
+        role_id=role_id,
+        description=step.description,
+        phase=ActionPhase.REGISTERED,
+        start=schedule.start,
+        expected_end=schedule.expected_end,
+        checkpoints=schedule.checkpoints,
+        registered_cycle=cycle_id,
+        depends_on=step.depends_on,
+        action=step.action,
+    )
+
+
 def _modified_record(record: ActionRecord, schedule: ModifiedActionSchedule) -> ActionRecord:
     return ActionRecord(
         action_id=record.action_id,
@@ -164,6 +200,8 @@ def _modified_record(record: ActionRecord, schedule: ModifiedActionSchedule) -> 
         checkpoints=schedule.checkpoints,
         registered_cycle=record.registered_cycle,
         commit_group_id=record.commit_group_id,
+        depends_on=record.depends_on,
+        action=record.action,
     )
 
 
@@ -178,6 +216,37 @@ def _withdrawn_record(record: ActionRecord) -> ActionRecord:
         checkpoints=record.checkpoints,
         registered_cycle=record.registered_cycle,
         commit_group_id=record.commit_group_id,
+        depends_on=record.depends_on,
+        action=record.action,
+    )
+
+
+def dependencies_satisfied(record: ActionRecord, records: Mapping[ActionId, ActionRecord]) -> bool:
+    """依赖是否全部被 World 实际提交为 completed；未注册或未完成都不满足。"""
+    for dep in record.depends_on:
+        dep_record = records.get(dep)
+        if dep_record is None or dep_record.phase is not ActionPhase.COMPLETED:
+            return False
+    return True
+
+
+def retime_on_activation(record: ActionRecord, now: SimulationTime) -> ActionRecord:
+    """依赖就绪时把仍 REGISTERED 的行动整体平移到不早于 now。"""
+    if now <= record.start:
+        return record
+    shift = now - record.start
+    return ActionRecord(
+        action_id=record.action_id,
+        role_id=record.role_id,
+        description=record.description,
+        phase=record.phase,
+        start=SimulationTime(record.start + shift),
+        expected_end=SimulationTime(record.expected_end + shift),
+        checkpoints=tuple(SimulationTime(c + shift) for c in record.checkpoints),
+        registered_cycle=record.registered_cycle,
+        commit_group_id=record.commit_group_id,
+        depends_on=record.depends_on,
+        action=record.action,
     )
 
 
@@ -247,7 +316,40 @@ def prepare_registration(
         for action in response.actions:
             action_id = action.action_id
             record = records.get(action_id)
-            if isinstance(action, NewAction):
+            if isinstance(action, StepAction):
+                if record is None:
+                    other = new_ids.get(action_id)
+                    if other is not None and other != role_id:
+                        problems.append(f"新动作身份跨角色重复：{action_id}")
+                        continue
+                    schedule = schedules.get(action_id)
+                    if schedule is None:
+                        problems.append(f"新动作缺少时间安排：{action_id}")
+                        continue
+                    step = action
+                    new_ids[action_id] = role_id
+                    registered.append(_new_step_record(step, schedule, cycle_id, role_id))
+                    declared.add(action_id)
+                elif record.role_id != role_id:
+                    problems.append(f"不能声明其他角色的动作：{action_id}")
+                    continue
+                elif record.phase not in MAINTAINABLE_PHASES:
+                    problems.append(f"终态动作不能被重新声明：{action_id}")
+                    continue
+                elif record.action is not None and record.action != action.action:
+                    problems.append(
+                        f"同 ID 行动不能改变目标或参数（应撤回旧身份并新增动作）：{action_id}"
+                    )
+                    continue
+                elif set(record.depends_on) != set(action.depends_on):
+                    problems.append(
+                        f"同 ID 行动不能改变依赖（应撤回旧身份并新增动作）：{action_id}"
+                    )
+                    continue
+                else:
+                    maintained.append(record)
+                    declared.add(action_id)
+            elif isinstance(action, NewAction):
                 if record is not None:
                     problems.append(f"新行动不得复用既有行动身份：{action_id}")
                     continue
@@ -305,6 +407,11 @@ def prepare_registration(
                     else withdrawn_pending
                 )
                 target.append(_withdrawn_record(record))
+    # 执行提交边界：依赖必须已被 World 实际提交为 completed，未知/未满足
+    # 都不得开始；不能只相信角色侧的依赖过滤。
+    for record in registered:
+        if record.depends_on and not dependencies_satisfied(record, records):
+            problems.append(f"依赖尚未被 World 实际提交为完成，不能开始：{record.action_id}")
     return RegistrationPlan(
         cycle_id=cycle_id,
         simulation_time=current_time,
@@ -355,6 +462,13 @@ class ActionRegistry:
             updated[record.action_id] = record
         return ActionRegistry(updated)
 
+    def with_records(self, records: Iterable[ActionRecord]) -> ActionRegistry:
+        """用给定记录替换同身份记录（用于依赖激活时的重排）。"""
+        updated = dict(self._records)
+        for record in records:
+            updated[record.action_id] = record
+        return ActionRegistry(updated)
+
     def apply_outcomes(
         self, outcomes: Iterable[ActionOutcome]
     ) -> tuple[ActionRegistry, tuple[ActionRecord, ...]]:
@@ -389,6 +503,8 @@ class ActionRegistry:
                 checkpoints=record.checkpoints,
                 registered_cycle=record.registered_cycle,
                 commit_group_id=record.commit_group_id,
+                depends_on=record.depends_on,
+                action=record.action,
             )
             changed.append(updated)
         if not changed:

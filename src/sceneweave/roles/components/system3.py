@@ -1,23 +1,43 @@
-"""System3：把意向落实为本次完整主动行为集合。
+"""System3：把意向落实为一维全量结构化动作计划。
 
-System3 输出从现在起要主动实施或维持的全部行为：维持既有行动、明确
-修改未来部分、或提交一组新的并行行动；显式空集合表示撤回全部主动
-维持。发现只是当前做法不可行可以要求重做（须说明原因）；发现意向
-本身无法落实则反馈 System2。语义可执行性由 World 检查，这里不做
-固定动作表判断。
+System3 每次输出一个 JSON **一维数组**，完整声明从现在起要做的结构化
+原子动作（不是增删改指令）。可选 ``depends_on`` 表示「World 已实际把
+前置动作提交为 completed，本动作才允许开始」；同计划内相互依赖用局部
+``key`` 引用，程序会解析为真实身份。禁止自由文本动作、``do:[散文]``
+或自定义 operation；已有动作重声明必须携带真实 id 与完整参数。
 """
 
+from sceneweave.domain.action_plan import ActionPlan
 from sceneweave.domain.identity import ResponseId
 from sceneweave.domain.tracing import TurnTracer
 from sceneweave.roles.components.base import TextSampler
 from sceneweave.roles.components.support import OwnActionDigest, TurnFacts, trace_stage
-from sceneweave.roles.model_output import ModelOutputError, System3Plan, parse_system3_plan
+from sceneweave.roles.model_output import (
+    ModelOutputError,
+    System3Unfulfillable,
+    parse_system3_output,
+)
 
-SCHEMA = (
-    '{"feasible": true/false, "reason": "不可行或重做的原因", "retry": true/false,'
-    ' "maintain": ["继续维持的行动身份", ...],'
-    ' "modify": [{"id": "行动身份", "change": "明确的修改"}, ...],'
-    ' "new_actions": ["新行动的自然语言描述", ...]}'
+SCHEMA = "[动作对象, 动作对象, ...]（一维数组；没有主动行动时输出 []）"
+
+# 独立的意向不可落实控制对象：不是动作，也不是 World 客观事实。
+FAILURE_SCHEMA = '{"error": "intention_unfulfillable", "reason": "具体原因"}'
+
+# 动作字段表：固定 schema，模型不得自造种类或字段。
+_ACTION_TABLE = "\n".join(
+    [
+        '{"kind":"reach","target":"实体标识","effector":"left_hand|right_hand"} 伸手触及',
+        '{"kind":"grasp","target":"实体标识","effector":"left_hand|right_hand"} 抓取',
+        '{"kind":"release","target":"实体标识","effector":"left_hand|right_hand"} 松开',
+        '{"kind":"move","destination":{"entity":"实体标识"}或{"position":{"x":数值,"y":数值,"z":数值可选}},'
+        '"mode":"walk|brisk|slow|run|sneak"（可选，默认 walk）} 移动',
+        '{"kind":"say","content":"台词原文","target":"实体标识（可选）"} 说话（台词允许文本）',
+        '{"kind":"look","target":"实体标识（可选）"} 看',
+        '{"kind":"wait"} 等待',
+        '{"kind":"stand"} 站起',
+        '{"kind":"sit"} 坐下',
+        '{"kind":"give","target":"接收者实体标识","item":"物品实体标识","effector":"left_hand|right_hand"} 交付',
+    ]
 )
 
 
@@ -26,7 +46,6 @@ def build_prompt(
     intention: str,
     own_actions: tuple[OwnActionDigest, ...],
     context_note: str | None,
-    abandon: tuple[str, ...],
     attempt: int,
     background: str,
     memory: tuple[str, ...],
@@ -40,47 +59,54 @@ def build_prompt(
     ]
     lines = [
         f"你是角色 {facts.role_id}。{background}".rstrip(),
-        f"当前剧情时刻 {facts.simulation_time} 毫秒。",
-        f"当前意向：{intention}",
+        f"当前剧情时间 {facts.simulation_time} 毫秒。想达成的意向：{intention}",
         "私人认知：",
         *([f"- {item}" for item in memory] or ["- 无"]),
         "本轮感知（原始已知观测）：",
         *observations,
         "自身行动状态（引擎确认的细节）：",
         *known,
-        "自身可继续主动维持的行动：",
+        "自身仍在主动维持的行动（重声明时必须连同真实 id 与完整参数给出）：",
         *actions,
     ]
-    if abandon:
-        lines.append(f"System2 决定放弃以下行动的意向：{list(abandon)}")
     if context_note is not None:
         lines.append(f"需要针对的问题：{context_note}")
     if attempt > 1:
         lines.append(f"这是第 {attempt} 次落实尝试。")
     lines += [
-        "第三步：给出从现在起你要主动实施或维持的完整行为集合。",
-        "维持既有行动就列出身份；要调整未来部分就写明修改；新尝试构成一个并行组；",
-        "maintain 与 modify 互斥：同一个行动身份只能出现在其中一处。"
-        "原样继续已有尝试只填 maintain，不因尚未成功或再次说明目标就重复填 modify；",
-        "不再主动维持任何行为时用全空的集合显式表达。",
-        "仅撤回某个主动维持时，把该行动身份从 maintain 与 modify 中省略即可，完整集合的省略交由 World 结算；"
-        "modify 只用于调整仍在主动维持行动的未来做法，不要用修改描述“放弃/停止维持”来模拟撤回；",
-        "你可以在撤回旧动作的同一份完整声明中提出新尝试，也可以保留其它仍想维持的行为，不被迫一并放弃。",
-        "本次新提交只能是当前就能独立结算的一步（一个行动或一个并行组）；依赖某一步实际结果的后续步骤，"
-        "必须等那一步的反馈确认后，在之后的轮次再决定。",
-        "不能把“走过去并拿走物品”这类串行链塞进一条新行动，也不能拆成同组多个行动来掩盖依赖；"
-        "不能在描述里预设自己已经成功，也不能替其他主体的自主反应作决定。",
-        "例如你距离想拿取的物品还有约 1.4 米、尚不可触及时，先提交“靠近到可触及位置”这一步，"
-        "等待到达反馈后再在另一轮决定是否拿取；已经站在可触及时，直接提交拿取尝试即可。",
-        "三种输出互斥：正式声明为 feasible=true、retry=false，携带完整行动声明（maintain/modify/new_actions）；"
-        "内部重做为 feasible=true、retry=true；意向不可行为 feasible=false、retry=false。"
-        "后两种 reason 必填，且 maintain/modify/new_actions 必须全为空；feasible=false 不能同时 retry=true。",
-        "retry 或 feasible=false 是内部反馈，不是向引擎提交空集合，也不会取消已接受行动；"
-        "若你已明确修正做法，请直接输出正式 feasible=true、retry=false 的完整声明，不要用 retry=true 再携带行动。",
-        "只输出一个 JSON 对象，只含 schema 字段，四个必填键一个都不能省：",
+        "第三步：给出从现在起你要主动实施或维持的完整动作，用一维数组表达。",
+        "只允许下面这些结构化原子动作，字段固定；禁止用字符串动作、自由散文、"
+        "自定义 operation，也不要把“走过去并拿走某物”塞成一个动作——该拆分就拆成多个动作"
+        "（伸手与抓取分别是两个动作）。",
+        _ACTION_TABLE,
+        "已有行动要延续：动作对象里带上它的真实 id（从上方行动列表抄），并给出完整参数，"
+        "身份与已发生的进展、开始时间保持不变，不要重新计时。",
+        "同 ID 必须保持相同动作参数与依赖；改变做法时，从完整链省略旧身份并新增动作，"
+        "不要输出修改指令。",
+        "新动作不要写 id，由程序分配真实身份。",
+        "若某个新动作必须等另一个动作真正完成后才能开始，用 depends_on 列出它依赖的动作："
+        "同计划内新动作可用它自己的 key 互相引用（给被依赖的新动作写一个 key，"
+        "在依赖方写 depends_on:[那个 key]）；依赖一项已完成的历史动作就写它的真实 id。"
+        "depends_on 是可选的，没有依赖就不写。",
+        "依赖表示“前置动作被 World 实际提交为完成”，不是预计结束、也不是到点就成功；"
+        "多个依赖要全部完成。",
+        "不再主动维持某个行动，就从完整计划里省略它（省略不等于世界中的效果消失）。",
+        "没有主动行动时输出 []；[] 表示不再主动维持任何行为，不是格式错误。",
+        "动作区间与先后由后续翻译器按客观条件安排；你只决定要做什么、依赖什么。",
+        "只有当你依据当前已知条件确实找不到任何能满足意向的动作方案时，才改为输出这个"
+        "独立的控制对象（它不是动作，也不是世界事实）：",
+        FAILURE_SCHEMA,
+        "一般的可执行动作、暂时不确定成功与否、或只是被检查打回，都不要用它；"
+        "它只表示“在保持当前意向的前提下，当前已知条件下无法落实”。",
+        "只输出这个 JSON 一维数组本身（或上面的控制对象），不要任何解释，不要包装字段：",
         SCHEMA,
     ]
     return "\n".join(lines)
+
+
+def render_plan(plan: ActionPlan) -> str:
+    """计划的稳定 display text（依赖以原始引用展示）。"""
+    return plan.render()
 
 
 async def run(
@@ -91,16 +117,13 @@ async def run(
     *,
     response_id: ResponseId,
     context_note: str | None = None,
-    abandon: tuple[str, ...] = (),
     attempt: int = 1,
     background: str = "",
     memory: tuple[str, ...] = (),
     tracer: TurnTracer | None = None,
-) -> System3Plan:
-    """执行 System3；解析失败与不可行反馈如实传播。"""
-    prompt = build_prompt(
-        facts, intention, own_actions, context_note, abandon, attempt, background, memory
-    )
+) -> ActionPlan | System3Unfulfillable:
+    """执行 System3；解析失败如实传播，不转换为空计划。"""
+    prompt = build_prompt(facts, intention, own_actions, context_note, attempt, background, memory)
     try:
         raw = await sampler.sample(prompt, component="system3")
     except Exception as error:
@@ -116,7 +139,7 @@ async def run(
         )
         raise
     try:
-        plan = parse_system3_plan(raw)
+        outcome = parse_system3_output(raw)
     except ModelOutputError as error:
         trace_stage(
             tracer,
@@ -129,24 +152,31 @@ async def run(
             error=str(error),
         )
         raise
+    if isinstance(outcome, System3Unfulfillable):
+        trace_stage(
+            tracer,
+            "system3.unfulfillable",
+            facts,
+            response_id,
+            "System3 判断当前已知条件无法落实意向（独立失败信号）",
+            prompt=prompt,
+            raw_output=raw,
+            details={"reason": outcome.reason, "attempt": attempt},
+        )
+        return outcome
     trace_stage(
         tracer,
         "system3.declare",
         facts,
         response_id,
-        "System3 给出完整声明"
-        if (plan.feasible and not plan.retry)
-        else ("System3 要求重做" if plan.retry else "System3 反馈意向不可行"),
+        "System3 给出完整结构化动作计划",
         prompt=prompt,
         raw_output=raw,
         details={
-            "feasible": plan.feasible,
-            "retry": plan.retry,
-            "reason": plan.reason,
-            "maintain": "、".join(str(item) for item in plan.maintain),
-            "modify": "；".join(f"{item.action_id}:{item.change}" for item in plan.modify),
-            "new_actions": "；".join(plan.new_descriptions),
+            "actions": len(outcome.actions),
+            "with_dependencies": sum(1 for item in outcome.actions if item.depends_on),
+            "plan": render_plan(outcome),
             "attempt": attempt,
         },
     )
-    return plan
+    return outcome

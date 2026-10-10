@@ -733,14 +733,13 @@ def test_cli_builtin_factory_config_error_is_clean_and_offline(
 # ---- 完整装配 + runner + 组件日志 + 录制/重放 ----
 
 
-_S1_GO = '{"reconsider": true, "note": "门被推开了"}'
-_S1_SKIP = '{"reconsider": false, "note": "照旧"}'
-_S2 = '{"intention": "查看抽屉里的东西", "abandon": []}'
-_S3 = '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走到书桌旁拉开抽屉"]}'
+_S1_GO = '{"route": "rethink", "note": "门被推开了"}'
+_S1_SKIP = '{"route": "continue", "note": "照旧"}'
+_S2 = '{"intention": "查看抽屉里的东西"}'
+_S3 = '[{"kind": "move", "destination": {"entity": "drawer"}}]'
 _TRANSLATION = (
-    '{"schedules": [{"action_id": "a-lin-1", "commit_group_id": "g-lin-1",'
-    ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}],'
-    ' "modified_schedules": []}'
+    '{"schedules": [{"action_id": "a-lin-1",'
+    ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}]}'
 )
 
 

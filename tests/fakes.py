@@ -44,6 +44,7 @@ from sceneweave.domain.messages import (
     Observation,
     Rejection,
     RoleResponse,
+    StepAction,
     TurnInput,
     WorldEvent,
 )
@@ -289,13 +290,18 @@ class FakeSemanticWorld(World):
         )
 
     async def check_response(
-        self, candidate: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        self,
+        candidate: RoleResponse,
+        *,
+        arrangements: Sequence[ActionArrangement] = (),
+        schedules: Sequence[ActionSchedule] = (),
     ) -> ActionCheckResult:
         self.checks.append((candidate, tuple(arrangements)))
         blocked = tuple(
             item.action_id
             for item in candidate.actions
-            if isinstance(item, NewAction) and "不可能" in item.description
+            if (isinstance(item, NewAction) and "不可能" in item.description)
+            or (isinstance(item, StepAction) and "不可能" in item.action.display)
         )
         return ActionCheckResult(
             cycle_id=candidate.cycle_id,
@@ -517,9 +523,29 @@ class ScriptedTranslator:
 
     def default_result(self, request: TranslationRequest) -> TranslationResult:
         """不经 override 的标准安排；供 override 分支复用。"""
+        arrangement_ids = {item.action_id for item in request.arrangements}
         schedules: list[ActionSchedule] = []
         for item in request.response.actions:
-            if isinstance(item, NewAction):
+            if isinstance(item, StepAction):
+                if item.action_id in arrangement_ids:
+                    continue  # 既有动作重声明不重新翻译。
+                delay, duration, checkpoints = self.plans.get(
+                    item.action.display, (self.delay, self.duration, self.checkpoints)
+                )
+                start = request.current_time + delay
+                end = start + duration
+                schedules.append(
+                    ActionSchedule(
+                        action_id=item.action_id,
+                        commit_group_id=CommitGroupId(
+                            f"g-{request.response.role_id}-{request.response.response_id}"
+                        ),
+                        start=SimulationTime(start),
+                        expected_end=SimulationTime(end),
+                        checkpoints=tuple(SimulationTime(start + c) for c in checkpoints),
+                    )
+                )
+            elif isinstance(item, NewAction):
                 delay, duration, checkpoints = self.plans.get(
                     item.description, (self.delay, self.duration, self.checkpoints)
                 )

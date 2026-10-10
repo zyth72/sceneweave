@@ -166,7 +166,11 @@ class DemoWorld(World):
         )
 
     async def check_response(
-        self, response: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        self,
+        response: RoleResponse,
+        *,
+        arrangements: Sequence[ActionArrangement] = (),
+        schedules: Sequence[ActionSchedule] = (),
     ) -> ActionCheckResult:
         blocked = tuple(
             item.action_id

@@ -39,23 +39,30 @@ def require_json_keys(data: dict[str, Any], keys: tuple[str, ...], stage: str) -
         raise ModelJsonError(f"{stage} 输出缺少必填字段：{missing}")
 
 
-def parse_model_json(raw: str, stage: str, *, allowed_keys: tuple[str, ...]) -> dict[str, Any]:
-    """解析一段模型文本为 JSON 对象；失败是明确错误，不做修复。
+def parse_json_text(raw: str, stage: str) -> Any:
+    """解析一段模型文本为任意 JSON 值；失败是明确错误，不做修复。
 
-    重复键、NaN/Infinity 与 schema 外未知键都拒绝，避免错误输出被
-    解释为合法空集合或维持声明。
+    重复键、NaN/Infinity 都拒绝；不限制顶层类型（供二维数组使用）。
     """
     if not isinstance(raw, str) or not raw.strip():
         raise ModelJsonError(f"{stage} 输出为空")
     try:
-        data = json.loads(
+        return json.loads(
             raw,
             object_pairs_hook=reject_duplicate_keys,
             parse_constant=reject_constant,
         )
     except json.JSONDecodeError as error:
         raise ModelJsonError(f"{stage} 输出不是合法 JSON：{error}") from error
-    data = require_json_mapping(data, stage)
+
+
+def parse_model_json(raw: str, stage: str, *, allowed_keys: tuple[str, ...]) -> dict[str, Any]:
+    """解析一段模型文本为 JSON 对象；失败是明确错误，不做修复。
+
+    重复键、NaN/Infinity 与 schema 外未知键都拒绝，避免错误输出被
+    解释为合法空集合或维持声明。
+    """
+    data = require_json_mapping(parse_json_text(raw, stage), stage)
     unknown = sorted(set(data) - set(allowed_keys))
     if unknown:
         raise ModelJsonError(f"{stage} 输出包含未知字段：{unknown}")

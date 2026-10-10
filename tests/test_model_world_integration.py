@@ -36,16 +36,13 @@ from .fakes import (
 )
 from .test_model_world import Brain, study_card
 
-S1_GO = '{"reconsider": true, "note": "门被推开了"}'
-S1_SKIP = '{"reconsider": false, "note": "照旧"}'
-S2 = '{"intention": "查看抽屉里的东西", "abandon": []}'
-S3_DRAWER = (
-    '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走到书桌旁拉开抽屉"]}'
-)
+S1_GO = '{"route": "rethink", "note": "门被推开了"}'
+S1_SKIP = '{"route": "continue", "note": "照旧"}'
+S2 = '{"intention": "查看抽屉里的东西"}'
+S3_DRAWER = '[{"kind": "move", "destination": {"entity": "drawer"}}]'
 TRANSLATION = (
-    '{"schedules": [{"action_id": "a-lin-1", "commit_group_id": "g-lin-1",'
-    ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}],'
-    ' "modified_schedules": []}'
+    '{"schedules": [{"action_id": "a-lin-1",'
+    ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}]}'
 )
 
 
@@ -454,121 +451,59 @@ def test_ui_chain_real_controller_and_stepdata_with_model_world() -> None:
     asyncio.run(scenario())
 
 
-def test_modification_speed_takes_effect_in_full_scheduler() -> None:
-    """全 Scheduler：修改行动速度经 World 裁决真实生效。"""
+def test_plan_replacement_withdraws_active_action_and_registers_new() -> None:
+    """全 Scheduler：新计划替换时旧主动行动经 World 结算撤回，新行动登记。"""
 
     async def scenario() -> None:
-        import re
-
-        class SpeedBrain(Brain):
-            """进展模型按提示中的速度计算位置。"""
-
-            async def sample(self, prompt: str, *, component: str) -> str:
-                if component == "world-progress":
-                    elapsed = re.search(r"流逝 (\d+) 毫秒", prompt)
-                    if elapsed is None:
-                        return NO_PROGRESS
-                    elapsed_ms = int(elapsed.group(1))
-                    movement = re.search(
-                        r"- \S+（(\w+)）：速度 (\d+\.\d+) 米/秒，方向 \((-?\d+\.\d+), (-?\d+\.\d+)\)",
-                        prompt,
-                    )
-                    if movement is None:
-                        return NO_PROGRESS
-                    role, speed, dx, dy = (
-                        movement.group(1),
-                        float(movement.group(2)),
-                        float(movement.group(3)),
-                        float(movement.group(4)),
-                    )
-                    pos = re.search(rf"- {role}：\((-?\d+\.\d+), (-?\d+\.\d+)\)", prompt)
-                    if pos is None:
-                        return NO_PROGRESS
-                    x, y = float(pos.group(1)), float(pos.group(2))
-                    seconds = elapsed_ms / 1000
-                    import json as _json
-
-                    return _json.dumps(
-                        {
-                            "movements": [
-                                {
-                                    "object_id": role,
-                                    "position": [
-                                        round(x + dx * speed * seconds, 4),
-                                        round(y + dy * speed * seconds, 4),
-                                    ],
-                                }
-                            ],
-                            "updated_action_ids": [],
-                            "notes": ["按速度推进"],
-                            "passive_updates": [],
-                        },
-                        ensure_ascii=False,
-                    )
-                return await super().sample(prompt, component=component)
-
         role_model = RoleBrain(
             {
                 "system1": [
-                    '{"reconsider": true, "note": "开始走"}',
-                    '{"reconsider": false, "note": "照旧"}',
-                    '{"reconsider": true, "note": "想走得更快"}',
+                    '{"route": "rethink", "note": "开始走"}',
+                    '{"route": "continue", "note": "照旧"}',
+                    '{"route": "rethink", "note": "改主意坐下"}',
                 ]
-                + ['{"reconsider": false, "note": "照旧"}'] * 8,
+                + ['{"route": "continue", "note": "照旧"}'] * 8,
                 "system2": [
-                    '{"intention": "走向窗户", "abandon": []}',
-                    '{"intention": "加快", "abandon": []}',
+                    '{"intention": "走向窗户"}',
+                    '{"intention": "改为坐着等"}',
                 ],
                 "system3": [
-                    '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向窗户"]}',
-                    '{"feasible": true, "maintain": [],'
-                    ' "modify": [{"id": "a-lin-1", "change": "走得更快"}],'
-                    ' "new_actions": []}',
+                    '[{"kind": "move", "destination": {"entity": "window"}}]',
+                    '[{"kind": "sit"}]',
                 ],
             },
             "role",
         )
-        # 翻译器第一次给新行动安排，第二次给修改安排。
         translator_model = RoleBrain(
             {
                 "translator": [
                     '{"schedules": [{"action_id": "a-lin-1",'
-                    ' "commit_group_id": "g-lin-1", "start": 1000,'
-                    ' "expected_end": 4000, "checkpoints": [2500]}],'
-                    ' "modified_schedules": []}',
-                    '{"schedules": [], "modified_schedules":'
-                    ' [{"action_id": "a-lin-1", "start": 1000,'
-                    ' "expected_end": 6000, "checkpoints": [2500, 4000]}]}',
+                    ' "start": 1000, "expected_end": 9000}]}',
+                    '{"schedules": [{"action_id": "a-lin-2",'
+                    ' "start": 3200, "expected_end": 4200}]}',
                 ]
             },
             "tr",
         )
         world = ModelWorld(
             scene=load_scene_card(study_card()),
-            sampler_for_scope=lambda scope: SpeedBrain(),
+            sampler_for_scope=lambda scope: Brain(),
             roles=(rid("lin"),),
         )
         scheduler = Scheduler(
             roles=[ModelRole(rid("lin"), role_model)],
             world=world,
             translator=ModelTranslator.shared(translator_model),
-            # 时限 5000：t=0(登记),1000(start),2500(cp),3000(修改),4000(cp),5000(边界)。
             config=RunConfig(introspection_interval=ms(9000), max_duration=ms(5000)),
-            initial_events=[WorldEvent(EventId("door"), SimulationTime(0), "门被推开")],
+            initial_events=[
+                WorldEvent(EventId("door"), SimulationTime(0), "门被推开"),
+                WorldEvent(EventId("rethink"), SimulationTime(3000), "林舟改变主意"),
+            ],
         )
         result = await scheduler.run()
         assert result.reason is RunStopReason.TIME_LIMIT
-        record = scheduler.action_records()[ActionId("a-lin-1")]
-        assert record.expected_end == SimulationTime(6000), "修改安排生效"
-        lin = find_object(world.scene, "lin")
-        # t=1000 start（0.5m/s）；t=2500 cp 流逝1500ms → +0.75;
-        # t=3000 修改为 1.0m/s（Brain 按"更快"）；t=4000 cp 流逝1000ms → +1.0;
-        # t=5000 边界流逝1000ms → +1.0（但 4000 是 cp 后修改时刻 3000 后的 cp）。
-        # 实际 Brain 的修改裁决给出 1.0m/s，位置推进按各段速度积分。
-        assert lin.position[0] > 0.6, "位置按修改后速度实际推进"
-        # World 实际生效：修改后运动速度在进展提示中翻倍。
-        # （Brain 对"更快"给出 1.0m/s，修改后位置推进明显快于原 0.5m/s。）
-
-    from .test_model_world import NO_PROGRESS  # noqa: PLC0415
+        records = scheduler.action_records()
+        assert records[ActionId("a-lin-1")].phase is ActionPhase.WITHDRAWN, "旧主动行动撤回"
+        assert records[ActionId("a-lin-2")].phase is ActionPhase.COMPLETED, "新行动登记并完成"
 
     asyncio.run(scenario())

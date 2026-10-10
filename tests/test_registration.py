@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from sceneweave.domain.action_plan import ActionKind, AtomicAction, Effector
 from sceneweave.domain.identity import (
     ActionId,
     CommitGroupId,
@@ -17,6 +18,7 @@ from sceneweave.domain.messages import (
     ModifiedAction,
     NewAction,
     RoleResponse,
+    StepAction,
 )
 from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.translation import (
@@ -24,6 +26,11 @@ from sceneweave.domain.translation import (
     ActionSchedule,
     ModifiedActionSchedule,
     TranslationResult,
+)
+from sceneweave.engine.actions import (
+    ActionRecord,
+    FinalizedDeclaration,
+    prepare_registration,
 )
 from sceneweave.engine.registration import (
     RegistrationValidationError,
@@ -352,3 +359,81 @@ def test_modified_actions_do_not_join_group_overlap_constraint() -> None:
         )
         == ()
     )
+
+
+def _step_record(action_id: str, action: AtomicAction, *, depends_on: tuple[str, ...] = ()):
+    return ActionRecord(
+        action_id=ActionId(action_id),
+        role_id=RoleId("alice"),
+        description=action.display,
+        phase=ActionPhase.REGISTERED,
+        start=SimulationTime(100),
+        expected_end=SimulationTime(200),
+        checkpoints=(),
+        registered_cycle=CycleId("cycle-1"),
+        action=action,
+        depends_on=tuple(ActionId(item) for item in depends_on),
+    )
+
+
+def _step_declaration(step: StepAction) -> FinalizedDeclaration:
+    role_response = RoleResponse(CycleId("cycle-1"), RoleId("alice"), ResponseId("r-1"), (step,))
+    return FinalizedDeclaration(
+        response=role_response,
+        translation=TranslationResult(CycleId("cycle-1"), RoleId("alice"), ResponseId("r-1")),
+    )
+
+
+def test_prepare_registration_rejects_same_id_payload_change() -> None:
+    """执行提交边界：同 ID 改变目标/参数被拒绝，不得悄悄当维持。"""
+
+    record = _step_record(
+        "a-1", AtomicAction(kind=ActionKind.GRASP, target="key", effector=Effector.RIGHT_HAND)
+    )
+    changed = StepAction(
+        ActionId("a-1"),
+        AtomicAction(kind=ActionKind.GRASP, target="door", effector=Effector.RIGHT_HAND),
+    )
+    plan = prepare_registration(
+        CycleId("cycle-1"),
+        SimulationTime(50),
+        {ActionId("a-1"): record},
+        {RoleId("alice"): _step_declaration(changed)},
+    )
+    assert not plan.ok
+    assert any("不能改变目标或参数" in problem for problem in plan.problems)
+    assert plan.maintained == ()
+
+
+def test_prepare_registration_rejects_same_id_dependency_change() -> None:
+    record = _step_record(
+        "a-1", AtomicAction(kind=ActionKind.GRASP, target="key", effector=Effector.RIGHT_HAND)
+    )
+    changed = StepAction(
+        ActionId("a-1"),
+        AtomicAction(kind=ActionKind.GRASP, target="key", effector=Effector.RIGHT_HAND),
+        (ActionId("a-9"),),
+    )
+    plan = prepare_registration(
+        CycleId("cycle-1"),
+        SimulationTime(50),
+        {ActionId("a-1"): record},
+        {RoleId("alice"): _step_declaration(changed)},
+    )
+    assert not plan.ok
+    assert any("不能改变依赖" in problem for problem in plan.problems)
+
+
+def test_prepare_registration_maintains_identical_same_id_payload() -> None:
+    action = AtomicAction(kind=ActionKind.GRASP, target="key", effector=Effector.RIGHT_HAND)
+    record = _step_record("a-1", action)
+    same = StepAction(ActionId("a-1"), action)
+    plan = prepare_registration(
+        CycleId("cycle-1"),
+        SimulationTime(50),
+        {ActionId("a-1"): record},
+        {RoleId("alice"): _step_declaration(same)},
+    )
+    assert plan.ok, plan.problems
+    assert plan.maintained == (record,)
+    assert plan.registered == ()

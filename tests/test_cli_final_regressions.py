@@ -236,7 +236,7 @@ def test_valid_role_identity_cannot_overwrite_ui_world_diagnostics() -> None:
         ),
     )
     scripts = {
-        f"role:{role.role_id}": {"system1": ['{"reconsider":false,"note":"观察"}'] * 5}
+        f"role:{role.role_id}": {"system1": ['{"route": "continue","note":"观察"}'] * 5}
         for role in config.roles
     }
     assembly = assemble(config, build_scripted_factory(scripts))

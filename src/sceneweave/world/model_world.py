@@ -59,6 +59,7 @@ from sceneweave.domain.messages import (
     NewAction,
     Observation,
     RoleResponse,
+    StepAction,
     WorldEvent,
 )
 from sceneweave.domain.model_json import (
@@ -69,7 +70,7 @@ from sceneweave.domain.model_json import (
 from sceneweave.domain.modeling import TextSampler
 from sceneweave.domain.time import SimulationTime
 from sceneweave.domain.tracing import TraceRecord, TraceValue, TurnTracer
-from sceneweave.domain.translation import ActionArrangement
+from sceneweave.domain.translation import ActionArrangement, ActionSchedule
 from sceneweave.world.base import World
 from sceneweave.world.scene import (
     MoveObjectPatch,
@@ -298,21 +299,28 @@ class ModelWorld(World):
     # ---- world.base.World 接口 ----
 
     async def check_response(
-        self, response: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        self,
+        response: RoleResponse,
+        *,
+        arrangements: Sequence[ActionArrangement] = (),
+        schedules: Sequence[ActionSchedule] = (),
     ) -> ActionCheckResult:
         """基于共同版本对完整主动集合的无副作用检查。
 
         提示分别携带该角色可见的场景投影、引擎给出的只读既有安排
-        快照与 World 实际状态；不同角色并行、同角色串行。安排只供
-        检查，不写入事实、不当作实际开始或角色感知。语义由模型判断，
-        结构错误是运行错误。
+        快照、翻译后的平坦时间安排与 World 实际状态；不同角色并行、
+        同角色串行。安排只供检查，不写入事实、不当作实际开始或角色
+        感知。语义由模型判断，结构错误是运行错误。
         """
         frozen_arrangements = self._frozen_arrangements(arrangements)
+        frozen_schedules = tuple(schedules)
+        if not all(isinstance(item, ActionSchedule) for item in frozen_schedules):
+            raise ModelWorldError("检查的 schedules 每项必须是 ActionSchedule")
         scope = f"world-check-{response.role_id}"
         # 检查依据进入时的共同版本与已知剧情时刻；等待期间事实冻结。
         base_version = self._version
         base_time = self._current_time
-        prompt = self._check_prompt(response, frozen_arrangements)
+        prompt = self._check_prompt(response, frozen_arrangements, frozen_schedules)
         raw: str | None = None
         self._require_scope_free(scope)
         self._require_no_writer("检查")
@@ -355,7 +363,9 @@ class ModelWorld(World):
             raw_ids = data["action_ids"]
             if not isinstance(raw_ids, list):
                 raise ModelWorldError("action_ids 必须是数组")
-            declared = {item.action_id for item in response.actions}
+            declared = {
+                item.action_id for item in (response.plan.actions if response.plan else ())
+            } | {item.action_id for item in response.actions}
             related: list[ActionId] = []
             for item in raw_ids:
                 if not isinstance(item, str) or not item:
@@ -1217,11 +1227,21 @@ class ModelWorld(World):
         return frozen
 
     def _check_prompt(
-        self, response: RoleResponse, arrangements: Sequence[ActionArrangement] = ()
+        self,
+        response: RoleResponse,
+        arrangements: Sequence[ActionArrangement] = (),
+        schedules: Sequence[ActionSchedule] = (),
     ) -> str:
         declaration: list[str] = []
         for item in response.actions:
-            if isinstance(item, NewAction):
+            if isinstance(item, StepAction):
+                suffix = (
+                    "（依赖 " + "、".join(str(dep) for dep in item.depends_on) + "，需其真正完成）"
+                    if item.depends_on
+                    else ""
+                )
+                declaration.append(f"- 动作 {item.action_id}：{item.action.display}{suffix}")
+            elif isinstance(item, NewAction):
                 declaration.append(
                     f"- 新行动 {item.action_id}（组 {item.commit_group_id}）：{item.description}"
                 )
@@ -1229,7 +1249,28 @@ class ModelWorld(World):
                 declaration.append(f"- 修改 {item.action_id}：{item.change}")
             else:
                 declaration.append(f"- 维持 {item.action_id}")
-        declared_ids = [str(item.action_id) for item in response.actions]
+        chain_lines: list[str] = []
+        if response.plan is not None and response.plan.actions:
+            for entry in response.plan.actions:
+                dep = (
+                    "；依赖 " + "、".join(str(d) for d in entry.depends_on)
+                    if entry.depends_on
+                    else ""
+                )
+                if entry.depends_on:
+                    marker = "（依赖尚未核验为已完成；是条件化的未来动作，不是已成功事实）"
+                else:
+                    marker = ""
+                chain_lines.append(f"- {entry.action_id}：{entry.action.display}{dep}{marker}")
+        declared_ids = sorted(
+            {str(item.action_id) for item in (response.plan.actions if response.plan else ())}
+            | {str(item.action_id) for item in response.actions}
+        )
+        schedule_lines = [
+            f"- {item.action_id}：{item.start}→{item.expected_end}ms"
+            + (f" 节点{list(item.checkpoints)}" if item.checkpoints else "")
+            for item in sorted(schedules, key=lambda item: str(item.action_id))
+        ]
         arrangement_lines = [
             f"- {item.action_id}（{item.phase.value}）：{item.description}，"
             f"原安排 {item.start}→{item.expected_end}ms"
@@ -1249,7 +1290,11 @@ class ModelWorld(World):
             *(arrangement_lines or ["- 无"]),
             "World 实际行动状态（已提交事实）：",
             *(own_states or ["- 无"]),
-            "角色的完整主动行为声明（本轮待检查）：",
+            "角色内部保存的完整动作链（含尚未满足依赖的后续动作；整链检查）：",
+            *(chain_lines or ["- 无"]),
+            "翻译后的平坦时间安排（只读；不是已发生事实）：",
+            *(schedule_lines or ["- 无"]),
+            "角色的完整主动行为声明（本轮要执行提交的当前动作）：",
             *(declaration or ["- 空集合（撤回全部主动维持）"]),
             "本轮 action_ids 允许的身份（只能从中选择，按声明顺序）：" + str(declared_ids),
             "action_ids 只列真正受影响的声明行动身份：不得填提交组、角色、响应或事件身份，"
@@ -1259,12 +1304,12 @@ class ModelWorld(World):
             "检查客观可执行性：含义、当前步骤边界、未确认结果依赖、客观条件与既有行动的关系。",
             "维持已登记安排不是重新登记或重新开始：已登记等待中的行动可以维持，不因尚未出现在实际行动状态而拒绝，"
             "仍须按可见场景检查客观条件与步骤边界。",
-            "重点识别依赖未确认结果的串行链：无论是藏在一条新行动描述里，还是拆成同组多个行动，"
-            "只要后一步以“前一步已成功”为前提（如“走过去并取走物品”），就应不通过并给出角色可获知的原因。",
-            "“靠近到可触及位置”这类动作本身可以是一次独立的移动尝试：当前步骤的预期终点或完成条件不等于依赖后一步，"
-            "不能因为成功尚未确认、或没有预先保证必定触达，就认定为串行链；只有把依赖前一步实际结果的后续动作"
-            "（如移动后再拿取）并入同一次提交才是链。",
-            "客观路径确实不可执行仍应拒绝；不要求角色预先证明动作必定成功。",
+            "完整链里的条件化未来动作（带 depends_on）不是已成功事实：不得因为前置动作尚未真正完成、"
+            "或该未来动作尚未到点就一概拒绝；而是结合整条链与完整时间安排，判断它在依赖真正满足后是否客观可执行。",
+            "不能把依赖当已经成立的成功事实，也不能只凭预计结束时间就认定后置一定成功；"
+            "只把确实不可执行、或把尚未确认的结果提前当作既成前提的声明判为不通过。",
+            "不要求角色预先证明动作必定成功；合理的一维动作链（含显式依赖与可交叠/链式的独立安排）应当通过。",
+            "客观路径确实不可执行仍应拒绝。",
             "不替角色决定意愿、选择目标或改写具体做法；被动影响不要求列为主动行为；空集合是合法声明。",
             "只输出一个 JSON 对象，格式：",
             CHECK_SCHEMA,

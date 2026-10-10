@@ -9,6 +9,7 @@
 import enum
 from dataclasses import dataclass
 
+from sceneweave.domain.action_plan import ActionPlan, PlanAction, StepAction
 from sceneweave.domain.identity import (
     ActionId,
     CommitGroupId,
@@ -46,6 +47,7 @@ __all__ = [
     "Observation",
     "Rejection",
     "RoleResponse",
+    "StepAction",
     "TriggerReason",
     "TurnInput",
     "WorldEvent",
@@ -222,36 +224,73 @@ class ModifiedAction:
         require_text(self.change, "行动修改")
 
 
-type ActionDeclaration = MaintainAction | NewAction | ModifiedAction
+type ActionDeclaration = StepAction | MaintainAction | NewAction | ModifiedAction
 
 
 @dataclass(frozen=True, slots=True)
 class RoleResponse:
     """一次完整的主动行为声明。
 
-    actions 是从现在起要主动实施或维持的全部行为，必须显式提供
+    ``actions`` 是从现在起要主动实施或维持的全部行为，必须显式提供
     （省略字段是构造错误，不会被当作空集合）；合法空集合表示撤回
     全部主动维持，不是未执行某个内部阶段。字段缺失、解析失败、
     调用尚未完成或运行错误不得被转换为空集合。
+
+    协议纠正后的活跃路径使用结构化 ``StepAction``（原子动作 + 身份），
+    并把角色内部的完整动作链放在 ``plan`` 里供翻译器整链拍平；World/
+    引擎的检查与翻译消费完整 ``plan``，执行提交只登记 ``actions`` 中的
+    最近步骤。旧的三类声明（维持/修改/新增）仅为低层历史测试保留，
+    不进入模型活跃路径。
+
+    ``reused`` 为真表示本声明复用角色内部已保存且已通过整链检查的完整
+    链与排程（System1 判断无需重新考虑）：引擎不再翻译、不再整链检查，
+    直接按 ``actions`` 做最近步骤执行提交。
     """
 
     cycle_id: CycleId
     role_id: RoleId
     response_id: ResponseId
     actions: tuple[ActionDeclaration, ...]
+    plan: ActionPlan | None = None
+    reused: bool = False
 
     def __post_init__(self) -> None:
         require_identifier(self.cycle_id, "周期身份")
         require_identifier(self.role_id, "角色身份")
         require_identifier(self.response_id, "响应身份")
         if not isinstance(self.actions, tuple) or not all(
-            isinstance(item, (MaintainAction, NewAction, ModifiedAction)) for item in self.actions
+            isinstance(item, (StepAction, MaintainAction, NewAction, ModifiedAction))
+            for item in self.actions
         ):
             raise ValueError("主动行为集合必须是行动声明元组")
+        if type(self.reused) is not bool:
+            raise ValueError("复用标记必须是布尔值")
         require_unique_identifiers([item.action_id for item in self.actions], "行动身份")
         groups = {item.commit_group_id for item in self.actions if isinstance(item, NewAction)}
         if len(groups) > 1:
             raise ValueError("一次响应的新行动只能属于一个并行提交组")
+        if self.plan is not None:
+            if not isinstance(self.plan, ActionPlan):
+                raise ValueError("plan 必须是 ActionPlan 或 None")
+            for plan_item in self.plan.actions:
+                if not isinstance(plan_item, PlanAction) or plan_item.action_id is None:
+                    raise ValueError("角色保存的完整动作链必须携带已分配的动作身份")
+            by_id = {plan_item.action_id: plan_item for plan_item in self.plan.actions}
+            for item in self.actions:
+                if not isinstance(item, StepAction):
+                    raise ValueError("声明与 plan 同时存在时，actions 只能是结构化当前动作")
+                entry = by_id.get(item.action_id)
+                if entry is None:
+                    raise ValueError(f"当前动作不在保存的完整链中：{item.action_id}")
+                if entry.action != item.action:
+                    raise ValueError(f"当前动作与保存链的动作不一致：{item.action_id}")
+                if tuple(ActionId(ref) for ref in entry.depends_on) != item.depends_on:
+                    raise ValueError(f"当前动作与保存链的依赖不一致：{item.action_id}")
+
+    @property
+    def step_actions(self) -> tuple[StepAction, ...]:
+        """只取结构化当前步骤声明；含旧类型时为内部错误的调用方。"""
+        return tuple(item for item in self.actions if isinstance(item, StepAction))
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,12 +5,17 @@
 声明。schema 以现有不可变消息承接，保持最小直白。
 """
 
+import enum
 from dataclasses import dataclass
 from typing import Any
 
+from sceneweave.domain.action_plan import ActionPlan, parse_action_plan
 from sceneweave.domain.identity import ActionId
 from sceneweave.domain.model_json import (
     ModelJsonError,
+)
+from sceneweave.domain.model_json import (
+    parse_json_text as _shared_parse_json_text,
 )
 from sceneweave.domain.model_json import (
     parse_model_json as _shared_parse_model_json,
@@ -21,101 +26,66 @@ class ModelOutputError(ModelJsonError):
     """模型输出未通过结构校验；不得转换为空声明或默认行为。"""
 
 
+class System1Route(enum.StrEnum):
+    """System1 的三路分流；严格枚举，模型不得自造。"""
+
+    CONTINUE = "continue"
+    REPLAN = "replan"
+    RETHINK = "rethink"
+
+
 @dataclass(frozen=True, slots=True)
 class System1Decision:
-    """System1 的判断结果：是否需要重新考虑，以及认知更新说明。"""
+    """System1 的判断结果：三路分流与认知更新说明。
 
-    reconsider: bool
+    - ``continue``：沿用已保存的完整链与排程，不调用 System2/3/翻译器。
+    - ``replan``：保留当前意向，只让 System3 重新落实。
+    - ``rethink``：重新选择意向（System2）后再落实；首次无意向必须 rethink。
+    """
+
+    route: System1Route
     note: str
 
     def __post_init__(self) -> None:
-        if type(self.reconsider) is not bool:
-            raise ModelOutputError("reconsider 必须是布尔值")
+        if not isinstance(self.route, System1Route):
+            raise ModelOutputError("route 必须是 System1Route")
         if not isinstance(self.note, str) or not self.note:
             raise ModelOutputError("note 必须是非空字符串")
 
 
 @dataclass(frozen=True, slots=True)
+class System3Unfulfillable:
+    """System3 的独立内部失败信号：当前已知条件无法落实该意向。
+
+    这不是动作，也不是 World 客观事实；只有 System3 明确判断在保持当前
+    意向的前提下找不到方案时才输出。解析为独立类型，不并入动作列表，
+    也不使用 feasible/retry wrapper 或 diff 分类。
+    """
+
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, str) or not self.reason:
+            raise ModelOutputError("reason 必须是非空字符串")
+
+
+_SYSTEM3_ERROR = "intention_unfulfillable"
+
+
+@dataclass(frozen=True, slots=True)
 class System2Intention:
-    """System2 的意向选择：保持/改变后的意向与放弃的行动。"""
+    """System2 的意向选择：当前意向（不含物理可执行性与放弃指令）。"""
 
     intention: str
-    abandon: tuple[ActionId, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.intention, str) or not self.intention:
             raise ModelOutputError("intention 必须是非空字符串")
-        if not isinstance(self.abandon, tuple) or not all(
-            isinstance(item, str) and item for item in self.abandon
-        ):
-            raise ModelOutputError("abandon 必须是非空字符串身份元组")
-        if len(set(self.abandon)) != len(self.abandon):
-            raise ModelOutputError("abandon 行动身份必须唯一")
 
 
 @dataclass(frozen=True, slots=True)
-class ModificationRef:
-    """System3 输出中对一个已有行动的明确修改引用。"""
-
-    action_id: ActionId
-    change: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.action_id, str) or not self.action_id:
-            raise ModelOutputError("修改行动身份必须是非空字符串")
-        if not isinstance(self.change, str) or not self.change:
-            raise ModelOutputError("change 必须是非空字符串")
-
-
-@dataclass(frozen=True, slots=True)
-class System3Plan:
-    """System3 的落实计划：意向可行性、内部重做与完整主动集合。"""
-
-    feasible: bool
-    reason: str
-    retry: bool
-    maintain: tuple[ActionId, ...]
-    modify: tuple[ModificationRef, ...]
-    new_descriptions: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if type(self.feasible) is not bool:
-            raise ModelOutputError("feasible 必须是布尔值")
-        if not isinstance(self.reason, str):
-            raise ModelOutputError("reason 必须是字符串")
-        if type(self.retry) is not bool:
-            raise ModelOutputError("retry 必须是布尔值")
-        for name, items in (
-            ("maintain", self.maintain),
-            ("modify", self.modify),
-            ("new_descriptions", self.new_descriptions),
-        ):
-            if not isinstance(items, tuple):
-                raise ModelOutputError(f"{name} 必须是元组")
-        if not all(isinstance(item, str) and item for item in self.maintain):
-            raise ModelOutputError("maintain 每项必须是非空字符串身份")
-        if not all(isinstance(item, ModificationRef) for item in self.modify):
-            raise ModelOutputError("modify 每项必须是 ModificationRef")
-        if len(set(self.maintain)) != len(self.maintain):
-            raise ModelOutputError("maintain 行动身份必须唯一")
-        if len({item.action_id for item in self.modify}) != len(self.modify):
-            raise ModelOutputError("modify 行动身份必须唯一")
-        overlap = set(self.maintain) & {item.action_id for item in self.modify}
-        if overlap:
-            raise ModelOutputError(f"同一行动不能同时维持与修改：{sorted(overlap)}")
-        for description in self.new_descriptions:
-            if not isinstance(description, str) or not description:
-                raise ModelOutputError("new_descriptions 每项必须是非空字符串")
-        if not self.feasible and (self.maintain or self.modify or self.new_descriptions):
-            raise ModelOutputError("意向不可行时不得携带主动集合")
-        if self.retry and (self.maintain or self.modify or self.new_descriptions):
-            raise ModelOutputError("内部重做时不得携带主动集合")
-        if not self.feasible and not self.reason:
-            raise ModelOutputError("意向不可行时必须说明原因")
-        if self.retry and not self.reason:
-            raise ModelOutputError("内部重做时必须说明原因")
-        if self.retry and not self.feasible:
-            raise ModelOutputError("retry 与 feasible=false 不能同时成立")
+class _Missing:
+    """占位以保持模块导入面稳定；不参与活跃路径。"""
 
 
 def _require_keys(data: dict[str, Any], keys: tuple[str, ...], stage: str) -> None:
@@ -156,68 +126,57 @@ def parse_model_json(raw: str, stage: str, *, allowed_keys: tuple[str, ...]) -> 
 
 
 def parse_system1_decision(raw: str) -> System1Decision:
-    """System1 输出：{"reconsider": bool, "note": str}，两字段必填。"""
-    data = parse_model_json(raw, "system1", allowed_keys=("reconsider", "note"))
-    _require_keys(data, ("reconsider", "note"), "system1")
-    return System1Decision(
-        reconsider=_require_bool(data["reconsider"], "reconsider"),
-        note=_require_str(data["note"], "note"),
-    )
+    """System1 输出：{"route": "continue|replan|rethink", "note": str}，两字段必填。"""
+    data = parse_model_json(raw, "system1", allowed_keys=("route", "note"))
+    _require_keys(data, ("route", "note"), "system1")
+    raw_route = data["route"]
+    if not isinstance(raw_route, str):
+        raise ModelOutputError(f"route 必须是字符串，得到：{raw_route!r}")
+    try:
+        route = System1Route(raw_route)
+    except ValueError as error:
+        raise ModelOutputError(f"未知 route：{raw_route!r}") from error
+    return System1Decision(route=route, note=_require_str(data["note"], "note"))
 
 
 def parse_system2_intention(raw: str) -> System2Intention:
-    """System2 输出：{"intention": str, "abandon": [行动身份...]}。"""
-    data = parse_model_json(raw, "system2", allowed_keys=("intention", "abandon"))
-    _require_keys(data, ("intention", "abandon"), "system2")
-    return System2Intention(
-        intention=_require_str(data["intention"], "intention"),
-        abandon=_require_id_list(data["abandon"], "abandon"),
-    )
+    """System2 输出：{"intention": str}；只产当前意向，不产 abandon。"""
+    data = parse_model_json(raw, "system2", allowed_keys=("intention",))
+    _require_keys(data, ("intention",), "system2")
+    return System2Intention(intention=_require_str(data["intention"], "intention"))
 
 
-def parse_system3_plan(raw: str) -> System3Plan:
-    """System3 输出：完整主动集合三键必填（显式空用空数组表达）。
+def parse_system3_output(raw: str) -> ActionPlan | System3Unfulfillable:
+    """System3 输出：一维全量动作数组，或独立的意向不可落实控制对象。
 
-    feasible 为 false 表示意向不可行（须说明原因并反馈 System2）；
-    retry 为 true 表示只是做法需要重做；两者都不得携带主动集合。
+    数组按 ``parse_action_plan`` 严格解析（无自由文本、无 ID-only、无未知
+    字段）。控制对象必须恰为 ``{"error": "intention_unfulfillable",
+    "reason": 非空字符串}``，解析为独立内部结果而非动作。其它形状明确报错。
     """
-    data = parse_model_json(
-        raw,
-        "system3",
-        allowed_keys=("feasible", "reason", "retry", "maintain", "modify", "new_actions"),
-    )
-    _require_keys(data, ("feasible", "maintain", "modify", "new_actions"), "system3")
-    retry = _require_bool(data.get("retry", False), "retry")
-    reason = data.get("reason", "")
-    if not isinstance(reason, str):
-        raise ModelOutputError("reason 必须是字符串")
-    if not isinstance(data["modify"], list):
-        raise ModelOutputError("modify 必须是数组")
-    modify: list[ModificationRef] = []
-    for item in data["modify"]:
-        if not isinstance(item, dict):
-            raise ModelOutputError("modify 每项必须是对象")
-        _require_keys(item, ("id", "change"), "system3.modify")
-        if set(item) - {"id", "change"}:
-            raise ModelOutputError("system3.modify 输出包含未知字段")
-        modify.append(
-            ModificationRef(
-                action_id=ActionId(_require_str(item["id"], "modify.id")),
-                change=_require_str(item["change"], "modify.change"),
-            )
-        )
-    if not isinstance(data["new_actions"], list):
-        raise ModelOutputError("new_actions 必须是数组")
-    new_descriptions: list[str] = []
-    for item in data["new_actions"]:
-        if not isinstance(item, str) or not item:
-            raise ModelOutputError("new_actions 每项必须是非空字符串描述")
-        new_descriptions.append(item)
-    return System3Plan(
-        feasible=_require_bool(data["feasible"], "feasible"),
-        reason=reason,
-        retry=retry,
-        maintain=_require_id_list(data["maintain"], "maintain"),
-        modify=tuple(modify),
-        new_descriptions=tuple(new_descriptions),
-    )
+    try:
+        data = _shared_parse_json_text(raw, "system3")
+    except ModelJsonError as error:
+        raise ModelOutputError(str(error)) from error
+    if isinstance(data, list):
+        try:
+            return parse_action_plan(raw, "system3")
+        except ModelJsonError as error:
+            raise ModelOutputError(str(error)) from error
+    if isinstance(data, dict):
+        unknown = sorted(set(data) - {"error", "reason"})
+        if unknown:
+            raise ModelOutputError(f"system3 控制对象包含未知字段：{unknown}")
+        if set(data) != {"error", "reason"}:
+            raise ModelOutputError("system3 控制对象必须恰含 error 与 reason")
+        if data["error"] != _SYSTEM3_ERROR:
+            raise ModelOutputError(f"未知 system3 错误码：{data['error']!r}")
+        return System3Unfulfillable(reason=_require_str(data["reason"], "reason"))
+    raise ModelOutputError("system3 输出必须是 JSON 一维数组或 intention_unfulfillable 控制对象")
+
+
+def parse_system3_plan(raw: str) -> ActionPlan:
+    """System3 输出必须是动作数组；控制对象按解析错误处理。"""
+    outcome = parse_system3_output(raw)
+    if not isinstance(outcome, ActionPlan):
+        raise ModelOutputError("system3 输出是意向不可落实控制对象，不是动作数组")
+    return outcome

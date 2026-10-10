@@ -232,21 +232,18 @@ async def main() -> None:
     scene = load_scene_card(SCENE_CARD)
     role_model = ScriptedModel(
         {
-            "system1": ['{"reconsider": true, "note": "门被推开了"}']
-            + ['{"reconsider": false, "note": "照旧"}'] * 10,
-            "system2": ['{"intention": "走到书桌旁看看", "abandon": []}'],
-            "system3": [
-                '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}'
-            ],
+            "system1": ['{"route": "rethink", "note": "门被推开了"}']
+            + ['{"route": "continue", "note": "照旧"}'] * 10,
+            "system2": ['{"intention": "走到书桌旁看看"}'],
+            "system3": ['[{"kind": "move", "destination": {"entity": "desk"}}]'],
         }
     )
-    shen_model = ScriptedModel({"system1": ['{"reconsider": false, "note": "照旧"}'] * 11})
+    shen_model = ScriptedModel({"system1": ['{"route": "continue", "note": "照旧"}'] * 11})
     translator_model = ScriptedModel(
         {
             "translator": [
-                '{"schedules": [{"action_id": "a-lin-1", "commit_group_id": "g-lin-1",'
-                ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}],'
-                ' "modified_schedules": []}'
+                '{"schedules": [{"action_id": "a-lin-1",'
+                ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}]}'
             ]
         }
     )

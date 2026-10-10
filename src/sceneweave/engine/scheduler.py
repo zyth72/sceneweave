@@ -37,6 +37,7 @@ from sceneweave.domain.adjudication import (
 )
 from sceneweave.domain.identity import (
     ActionId,
+    CommitGroupId,
     CycleId,
     EventId,
     ResponseId,
@@ -54,6 +55,7 @@ from sceneweave.domain.messages import (
     NewAction,
     Rejection,
     RoleResponse,
+    StepAction,
     TriggerReason,
     TurnInput,
     WorldEvent,
@@ -61,7 +63,14 @@ from sceneweave.domain.messages import (
 from sceneweave.domain.scheduling import EventQueue, ScheduledEvent, ScheduledEventKind
 from sceneweave.domain.time import SimulationTime, validate_simulation_time
 from sceneweave.domain.tracing import TraceRecord, TraceValue, TurnTracer
-from sceneweave.domain.translation import TranslationRequest, TranslationResult
+from sceneweave.domain.translation import (
+    ActionArrangement,
+    ActionSchedule,
+    ExecutionSubmission,
+    PlanAcceptance,
+    TranslationRequest,
+    TranslationResult,
+)
 from sceneweave.engine.actions import (
     MAINTAINABLE_PHASES,
     TERMINAL_PHASES,
@@ -76,7 +85,7 @@ from sceneweave.engine.config import RunConfig
 from sceneweave.engine.control import RunGate, RunStatus
 from sceneweave.engine.registration import registration_issues
 from sceneweave.engine.report import CycleEvent, CycleReport, RoleCycleView
-from sceneweave.engine.responses import AcceptedResponse, CycleOutcome, ResponseRunner
+from sceneweave.engine.responses import CandidateResponse, CycleOutcome, ResponseRunner
 from sceneweave.roles.base import Role
 from sceneweave.translator.base import Translator
 from sceneweave.world.base import World
@@ -318,10 +327,7 @@ class Scheduler:
         self._registry = ActionRegistry()
         self._runner = ResponseRunner(
             self._roles.values(),
-            world,
             tracer=tracer,
-            max_rejections=max_rejections,
-            arrangements_for=lambda role_id: self._registry.arrangements_for(role_id),
         )
         self._cycle_seq = 0
         self._completed_cycles = 0
@@ -621,6 +627,18 @@ class Scheduler:
         # 7. 应用登记与队列：全部内容已预检，此处不再会失败。
         self._registry = self._registry.apply(plan)
         self._apply_queue_plan(queue_plan)
+        self._trace(
+            "engine.step_submitted",
+            cycle_id,
+            event_time,
+            "提交最近步骤执行：只登记当前可执行原子动作，未来步骤仍留在角色内部计划",
+            {
+                "submitted": len(plan.registered),
+                "maintained": len(plan.maintained),
+            },
+            action_ids=tuple(sorted((*(r.action_id for r in plan.registered),), key=str)),
+            outputs=tuple(f"{r.action_id}: {r.start}→{r.expected_end}ms" for r in plan.registered),
+        )
         self._trace(
             "registration.commit",
             cycle_id,
@@ -1003,7 +1021,7 @@ class Scheduler:
         outcome: CycleOutcome,
         base_version: WorldStateVersion,
     ) -> dict[RoleId, FinalizedDeclaration]:
-        """全部角色通过检查屏障之后依序翻译；先完成者不得抢先登记。"""
+        """全部角色完成响应采集之后依序翻译、整链检查、保存与最近步骤提交。"""
         used_ids = set(outcome.used_response_ids)
         tasks: dict[RoleId, asyncio.Task[FinalizedDeclaration]] = {}
         async with asyncio.TaskGroup() as group:
@@ -1011,7 +1029,7 @@ class Scheduler:
                 tasks[role_id] = group.create_task(
                     self._finalize_declaration(
                         self._roles[role_id],
-                        outcome.accepted[role_id],
+                        outcome.candidates[role_id],
                         cycle_id,
                         simulation_time,
                         used_ids,
@@ -1025,21 +1043,21 @@ class Scheduler:
     async def _finalize_declaration(
         self,
         role: Role,
-        accepted: AcceptedResponse,
+        candidate: CandidateResponse,
         cycle_id: CycleId,
         simulation_time: SimulationTime,
         used_ids: set[ResponseId],
         base_version: WorldStateVersion,
     ) -> FinalizedDeclaration:
-        """单个角色的翻译与登记校验循环；打回不重投原感知。
+        """单个角色的翻译→整链检查→保存→最近步骤执行提交循环。
 
-        只有维持或空声明的轮次不调用翻译器（维持不重新翻译），直接
-        生成关联同一响应的空时间安排并进入统一登记。结构不一致的
-        翻译结果是运行错误；只有合法完整翻译中的时间安排不合业务
-        约束才走打回。
+        正常路径只有这一个顺序：先翻译完整链，再由 World 对整链与完整排程
+        做无副作用检查；检查通过后角色保存完整链与排程，随后才提交最近步骤。
+        不存在翻译前的提前检查，也不整批登记未来动作。检查打回只重新落实
+        System3（保留已选意向），重译、重查，不重投原感知。
         """
         role_id = role.role_id
-        response = accepted.response
+        response = candidate.response
 
         def _finalize(
             current: RoleResponse, translation: TranslationResult
@@ -1048,175 +1066,322 @@ class Scheduler:
             self._candidates = {**self._candidates, role_id: finalized}
             return finalized
 
-        def _skip_translation(current: RoleResponse) -> FinalizedDeclaration | None:
-            """每轮响应（含打回重试后的完整响应）都判断：仅维持或空声明
-            不调用翻译器，直接合成关联同一响应的空时间安排。"""
-            if any(isinstance(item, (NewAction, ModifiedAction)) for item in current.actions):
-                return None
+        if response.reused:
+            # 复用角色内部已保存、已通过整链检查的链与排程：不翻译、不重查。
+            submission = role.execution_submission()
+            if submission is None:
+                translation = TranslationResult(response.cycle_id, role_id, response.response_id)
+                return _finalize(response, translation)
+            return _finalize(*self._apply_submission(response, submission, simulation_time))
+
+        arrangements = self._registry.arrangements_for(role_id)
+        is_plan_based = response.plan is not None
+        attempts = 0
+        while True:
+            translation, structural, timing = await self._translate_declaration(
+                role_id, response, cycle_id, simulation_time, base_version, arrangements
+            )
+            if structural:
+                raise RuntimeError("翻译结构不一致：" + "；".join(structural))
+            if self._world.state_version != base_version:
+                raise RuntimeError("翻译期间共同世界状态被修改，本轮前提不再成立")
+            full_schedules = self._full_chain_schedules(response, translation, arrangements)
+            # 整链检查：World 拿到完整一维结构化链与完整平坦排程，只做检查；
+            # 不产生任何开始/完成/事实。检查前不做任何提前检查。检查必须是
+            # 只读边界：若它改动了共同状态，立即失败，绝不保存或登记。
+            pre_check_version = self._world.state_version
+            chain_check = await self._world.check_response(
+                response, arrangements=arrangements, schedules=full_schedules
+            )
+            if self._world.state_version != pre_check_version:
+                raise RuntimeError("World.check_response 是只读边界，不得改变共同状态")
+            if self._world.state_version != base_version:
+                raise RuntimeError("World 检查期间共同世界状态被修改，本轮前提不再成立")
+            self._require_valid_check(chain_check, response, base_version)
+            chain_problems: tuple[str, ...] = ()
+            if chain_check.passed:
+                self._trace(
+                    "engine.chain_checked",
+                    cycle_id,
+                    simulation_time,
+                    "整条动作链通过 World 检查（尚未保存、尚未执行提交）",
+                    {
+                        "plan_actions": len(response.plan.actions) if response.plan else 0,
+                        "schedules": len(full_schedules),
+                    },
+                    role_id=role_id,
+                    response_id=response.response_id,
+                    action_ids=tuple(
+                        item.action_id
+                        for item in (response.plan.actions if response.plan else ())
+                        if item.action_id is not None
+                    ),
+                    outputs=_schedule_texts(translation),
+                    world_state_version=base_version,
+                )
+            else:
+                chain_problems = (chain_check.reason or "整链检查不通过",)
+                self._trace(
+                    "engine.chain_rejected",
+                    cycle_id,
+                    simulation_time,
+                    "整条动作链未通过 World 检查，回到 System3 重新落实",
+                    {"reason": chain_check.reason},
+                    role_id=role_id,
+                    response_id=response.response_id,
+                    action_ids=chain_check.action_ids,
+                    world_state_version=base_version,
+                )
+            if not timing and not chain_problems:
+                if not is_plan_based:
+                    return _finalize(response, translation)
+                plan = response.plan
+                assert plan is not None  # is_plan_based 已确认
+                acceptance = PlanAcceptance(
+                    declaration=response,
+                    plan=plan,
+                    schedules=full_schedules,
+                    check=chain_check,
+                )
+                await role.save_plan(acceptance)
+                submission = role.execution_submission()
+                if submission is None:
+                    return _finalize(response, translation)
+                return _finalize(*self._apply_submission(response, submission, simulation_time))
+            # 时间安排不合业务约束或整链检查不通过：打回角色重新落实，仍属同一周期。
+            problems: tuple[str, ...] = timing + chain_problems
+            if attempts >= self._max_translation_rejections:
+                raise RuntimeError(
+                    f"角色 {role_id} 在周期 {cycle_id} 的翻译打回次数"
+                    f"超过上限 {self._max_translation_rejections}，停止推进"
+                )
+            attempts += 1
+            rejection = Rejection(
+                cycle_id=cycle_id,
+                role_id=role_id,
+                rejected_response_id=response.response_id,
+                reason="；".join(problems),
+                action_ids=tuple(sorted({i.action_id for i in response.actions}, key=str)),
+            )
+            self._trace(
+                "registration.rejected",
+                cycle_id,
+                simulation_time,
+                "整链检查或时间安排问题打回角色重新决定",
+                {"reason": rejection.reason, "attempts": attempts},
+                role_id=role_id,
+                response_id=response.response_id,
+                action_ids=rejection.action_ids,
+            )
+            previous_id = response.response_id
+            response = await role.rejected(rejection)
+            self._require_valid_retry(response, role_id, cycle_id, used_ids)
+            self._trace(
+                "role.response",
+                cycle_id,
+                simulation_time,
+                "角色返回新的完整声明",
+                _response_details(response),
+                role_id=role_id,
+                response_id=response.response_id,
+                action_ids=tuple(i.action_id for i in response.actions),
+                related_response_id=previous_id,
+                outputs=_action_texts(response),
+            )
+            arrangements = self._registry.arrangements_for(role_id)
+
+    async def _translate_declaration(
+        self,
+        role_id: RoleId,
+        response: RoleResponse,
+        cycle_id: CycleId,
+        simulation_time: SimulationTime,
+        base_version: WorldStateVersion,
+        arrangements: tuple[ActionArrangement, ...],
+    ) -> tuple[TranslationResult, tuple[str, ...], tuple[str, ...]]:
+        """翻译完整链（或旧声明）；仅维持/空声明不调用翻译器。
+
+        返回翻译结果与登记前校验问题（结构 / 时间业务）。结构问题由调用者
+        转为运行错误；时间问题与整链检查一起走打回。
+        """
+        if response.plan is None and not _has_untranslated(response, self._registry.records):
             self._trace(
                 "translation.skipped",
                 cycle_id,
                 simulation_time,
                 "仅维持或空声明，无需重新翻译",
-                {"maintained": len(current.actions)},
-                role_id=role_id,
-                response_id=current.response_id,
-                outputs=_action_texts(current),
-                world_state_version=base_version,
-            )
-            return _finalize(
-                current,
-                TranslationResult(
-                    cycle_id=current.cycle_id,
-                    role_id=current.role_id,
-                    response_id=current.response_id,
-                ),
-            )
-
-        arrangements = self._registry.arrangements_for(role_id)
-        attempts = 0
-        while True:
-            skipped = _skip_translation(response)
-            if skipped is not None:
-                return skipped
-            request = TranslationRequest(
-                response=response,
-                current_time=simulation_time,
-                world_state_version=base_version,
-                arrangements=arrangements,
-                objective_context=self._world.translation_context(role_id),
-            )
-            self._trace(
-                "translation.request",
-                cycle_id,
-                simulation_time,
-                "翻译器确定时间安排",
-                {
-                    "new_actions": sum(isinstance(i, NewAction) for i in response.actions),
-                    "modified": sum(isinstance(i, ModifiedAction) for i in response.actions),
-                    "maintained": sum(isinstance(i, MaintainAction) for i in response.actions),
-                },
+                {"maintained": len(response.actions)},
                 role_id=role_id,
                 response_id=response.response_id,
-                action_ids=tuple(i.action_id for i in response.actions),
-                inputs=(
-                    *(request.objective_context.conditions if request.objective_context else ()),
-                    *(
-                        f"既有 {item.action_id}（{item.phase.value}）"
-                        f"{item.start}→{item.expected_end}ms"
-                        for item in arrangements
-                    ),
-                ),
                 outputs=_action_texts(response),
                 world_state_version=base_version,
             )
-            translation = await self._translator.translate(request)
-            # 类型与身份错误属于运行错误，不得伪装成语义打回。
-            if not isinstance(translation, TranslationResult):
-                raise RuntimeError(
-                    f"翻译器必须返回 TranslationResult，得到：{type(translation).__name__}"
-                )
-            if (
-                translation.cycle_id,
-                translation.role_id,
-                translation.response_id,
-            ) != (
-                response.cycle_id,
-                response.role_id,
-                response.response_id,
-            ):
-                raise RuntimeError("翻译结果必须关联同一响应")
-            issues = registration_issues(
-                response,
-                translation,
-                current_time=simulation_time,
-                arrangements=arrangements,
+            return (
+                TranslationResult(
+                    cycle_id=response.cycle_id,
+                    role_id=role_id,
+                    response_id=response.response_id,
+                ),
+                (),
+                (),
             )
-            structural = tuple(issue.text for issue in issues if issue.structural)
-            timing = tuple(issue.text for issue in issues if not issue.structural)
-            self._trace(
-                "translation.result",
-                cycle_id,
-                simulation_time,
-                "翻译完成"
-                if not issues
-                else f"时间安排未通过登记校验（结构 {len(structural)} 项，约束 {len(timing)} 项）",
-                {"structural": len(structural), "timing": len(timing)},
-                role_id=role_id,
-                response_id=response.response_id,
-                outputs=_schedule_texts(translation),
-                world_state_version=base_version,
-                error=None if not issues else "；".join(issue.text for issue in issues),
+        pre_context_version = self._world.state_version
+        objective_context = self._world.translation_context(role_id)
+        if self._world.state_version != pre_context_version:
+            raise RuntimeError("World.translation_context 是只读边界，不得改变共同状态")
+        request = TranslationRequest(
+            response=response,
+            current_time=simulation_time,
+            world_state_version=base_version,
+            arrangements=arrangements,
+            objective_context=objective_context,
+        )
+        self._trace(
+            "translation.request",
+            cycle_id,
+            simulation_time,
+            "翻译器确定完整链的平坦时间安排",
+            {
+                "plan_actions": len(response.plan.actions) if response.plan else 0,
+                "maintained": sum(isinstance(i, MaintainAction) for i in response.actions),
+            },
+            role_id=role_id,
+            response_id=response.response_id,
+            action_ids=tuple(i.action_id for i in response.actions),
+            inputs=(
+                *(request.objective_context.conditions if request.objective_context else ()),
+                *(
+                    f"既有 {item.action_id}（{item.phase.value}）{item.start}→{item.expected_end}ms"
+                    for item in arrangements
+                ),
+            ),
+            outputs=_action_texts(response),
+            world_state_version=base_version,
+        )
+        translation = await self._translator.translate(request)
+        if not isinstance(translation, TranslationResult):
+            raise RuntimeError(
+                f"翻译器必须返回 TranslationResult，得到：{type(translation).__name__}"
             )
-            if structural:
-                raise RuntimeError("翻译结构不一致：" + "；".join(structural))
-            if not timing:
-                return _finalize(response, translation)
-            # 时间安排不合业务约束：打回角色重新决定，仍属同一周期。
-            problems: tuple[str, ...] = timing
-            while problems:
-                if attempts >= self._max_translation_rejections:
-                    raise RuntimeError(
-                        f"角色 {role_id} 在周期 {cycle_id} 的翻译打回次数"
-                        f"超过上限 {self._max_translation_rejections}，停止推进"
-                    )
-                attempts += 1
-                rejection = Rejection(
-                    cycle_id=cycle_id,
-                    role_id=role_id,
-                    rejected_response_id=response.response_id,
-                    reason="；".join(problems),
-                    action_ids=tuple(sorted({i.action_id for i in response.actions}, key=str)),
+        if (
+            translation.cycle_id,
+            translation.role_id,
+            translation.response_id,
+        ) != (
+            response.cycle_id,
+            response.role_id,
+            response.response_id,
+        ):
+            raise RuntimeError("翻译结果必须关联同一响应")
+        issues = registration_issues(
+            response,
+            translation,
+            current_time=simulation_time,
+            arrangements=arrangements,
+        )
+        structural = tuple(issue.text for issue in issues if issue.structural)
+        timing = tuple(issue.text for issue in issues if not issue.structural)
+        self._trace(
+            "translation.result",
+            cycle_id,
+            simulation_time,
+            "翻译完成"
+            if not issues
+            else f"时间安排未通过登记校验（结构 {len(structural)} 项，约束 {len(timing)} 项）",
+            {"structural": len(structural), "timing": len(timing)},
+            role_id=role_id,
+            response_id=response.response_id,
+            outputs=_schedule_texts(translation),
+            world_state_version=base_version,
+            error=None if not issues else "；".join(issue.text for issue in issues),
+        )
+        return translation, structural, timing
+
+    def _full_chain_schedules(
+        self,
+        response: RoleResponse,
+        translation: TranslationResult,
+        arrangements: tuple[ActionArrangement, ...],
+    ) -> tuple[ActionSchedule, ...]:
+        """完整链的全部平坦排程：新动作取翻译结果，既有动作取现行安排。"""
+        translated = {item.action_id: item for item in translation.schedules}
+        arrangement_by_id = {item.action_id: item for item in arrangements}
+        if response.plan is None:
+            return translation.schedules
+        merged: list[ActionSchedule] = []
+        for item in response.plan.actions:
+            if item.action_id is None:  # pragma: no cover - 角色保证身份齐备
+                raise RuntimeError("完整链动作缺少已分配身份")
+            schedule = translated.get(item.action_id)
+            if schedule is None:
+                arrangement = arrangement_by_id.get(item.action_id)
+                if arrangement is None:
+                    raise RuntimeError(f"完整链动作既无翻译排程也无现行安排：{item.action_id}")
+                schedule = ActionSchedule(
+                    action_id=arrangement.action_id,
+                    commit_group_id=CommitGroupId(f"registered-{arrangement.action_id}"),
+                    start=arrangement.start,
+                    expected_end=arrangement.expected_end,
+                    checkpoints=arrangement.checkpoints,
+                )
+            merged.append(schedule)
+        return tuple(merged)
+
+    def _apply_submission(
+        self,
+        declaration: RoleResponse,
+        submission: ExecutionSubmission,
+        simulation_time: SimulationTime,
+    ) -> tuple[RoleResponse, TranslationResult]:
+        """把最近步骤提交转成登记输入；缓存排程过期时平移留痕。"""
+        schedules: list[ActionSchedule] = []
+        for schedule in submission.schedules:
+            if schedule.start <= simulation_time:
+                duration = schedule.expected_end - schedule.start
+                delta = simulation_time + 1 - schedule.start
+                shifted = ActionSchedule(
+                    action_id=schedule.action_id,
+                    commit_group_id=schedule.commit_group_id,
+                    start=SimulationTime(simulation_time + 1),
+                    expected_end=SimulationTime(simulation_time + 1 + duration),
+                    checkpoints=tuple(
+                        SimulationTime(checkpoint + delta) for checkpoint in schedule.checkpoints
+                    ),
                 )
                 self._trace(
-                    "registration.rejected",
-                    cycle_id,
+                    "engine.schedule_retimed",
+                    declaration.cycle_id,
                     simulation_time,
-                    "时间安排问题打回角色重新决定",
-                    {"reason": rejection.reason, "attempts": attempts},
-                    role_id=role_id,
-                    response_id=response.response_id,
-                    action_ids=rejection.action_ids,
+                    "缓存后续排程已过期（前置完成晚于预计），在真实完成后的合法时刻激活",
+                    {
+                        "action_id": schedule.action_id,
+                        "planned_start": schedule.start,
+                        "actual_start": shifted.start,
+                        "duration": duration,
+                    },
+                    role_id=declaration.role_id,
+                    response_id=declaration.response_id,
+                    action_ids=(schedule.action_id,),
+                    outputs=(f"{schedule.action_id}: {shifted.start}→{shifted.expected_end}ms",),
                 )
-                previous_id = response.response_id
-                response = await role.rejected(rejection)
-                self._require_valid_retry(response, role_id, cycle_id, used_ids)
-                self._trace(
-                    "role.response",
-                    cycle_id,
-                    simulation_time,
-                    "角色返回新的完整声明",
-                    _response_details(response),
-                    role_id=role_id,
-                    response_id=response.response_id,
-                    action_ids=tuple(i.action_id for i in response.actions),
-                    related_response_id=previous_id,
-                    outputs=_action_texts(response),
-                )
-                check = await self._world.check_response(response, arrangements=arrangements)
-                self._require_valid_check(check, response, base_version)
-                check_details: dict[str, TraceValue] = {
-                    "passed": check.passed,
-                    "arrangements": len(arrangements),
-                }
-                if check.reason:
-                    check_details["reason"] = check.reason
-                self._trace(
-                    "world.check",
-                    cycle_id,
-                    simulation_time,
-                    f"World 检查{'通过' if check.passed else '未通过'}",
-                    check_details,
-                    role_id=role_id,
-                    response_id=response.response_id,
-                    action_ids=check.action_ids,
-                    outputs=_action_texts(response),
-                    world_state_version=check.world_state_version,
-                )
-                if check.passed:
-                    break
-                problems = (check.reason or "客观条件不允许",)
-            arrangements = self._registry.arrangements_for(role_id)
+                schedules.append(shifted)
+            else:
+                schedules.append(schedule)
+        reg_response = RoleResponse(
+            cycle_id=declaration.cycle_id,
+            role_id=declaration.role_id,
+            response_id=declaration.response_id,
+            actions=submission.actions,
+            plan=declaration.plan,
+            reused=True,
+        )
+        reg_translation = TranslationResult(
+            cycle_id=declaration.cycle_id,
+            role_id=declaration.role_id,
+            response_id=declaration.response_id,
+            schedules=tuple(schedules),
+        )
+        return reg_response, reg_translation
 
     def _require_valid_retry(
         self,
@@ -1252,7 +1417,9 @@ class Scheduler:
             raise ValueError(f"检查结果与被检查响应不一致：{check.response_id}")
         if check.world_state_version != base_version:
             raise ValueError(f"检查依据的共同世界状态与本周期固定版本不一致：{check.response_id}")
-        declared = {item.action_id for item in response.actions}
+        declared = {item.action_id for item in (response.plan.actions if response.plan else ())} | {
+            item.action_id for item in response.actions
+        }
         for action_id in check.action_ids:
             if action_id not in declared:
                 raise ValueError(f"检查结果引用了声明外的行动：{action_id}")
@@ -1602,13 +1769,30 @@ def _describe_error(error: BaseException) -> str:
 def _action_texts(response: RoleResponse) -> tuple[str, ...]:
     texts: list[str] = []
     for item in response.actions:
-        if isinstance(item, NewAction):
+        if isinstance(item, StepAction):
+            suffix = (
+                "（依赖 " + "、".join(str(dep) for dep in item.depends_on) + "）"
+                if item.depends_on
+                else ""
+            )
+            texts.append(f"动作 {item.action_id}：{item.action.display}{suffix}")
+        elif isinstance(item, NewAction):
             texts.append(f"新增 {item.action_id}：{item.description}")
         elif isinstance(item, ModifiedAction):
             texts.append(f"修改 {item.action_id}：{item.change}")
         else:
             texts.append(f"维持 {item.action_id}")
     return tuple(texts)
+
+
+def _has_untranslated(response: RoleResponse, records: Mapping[ActionId, ActionRecord]) -> bool:
+    """是否存在需要翻译的新动作：旧三类新增/修改或未登记的结构化动作。"""
+    for item in response.actions:
+        if isinstance(item, (NewAction, ModifiedAction)):
+            return True
+        if isinstance(item, StepAction) and item.action_id not in records:
+            return True
+    return False
 
 
 def _schedule_texts(translation: TranslationResult) -> tuple[str, ...]:
@@ -1629,9 +1813,14 @@ def _response_details(response: RoleResponse) -> dict[str, TraceValue]:
         if isinstance(item, NewAction):
             new_group = item.commit_group_id
             break
+    step = sum(isinstance(item, StepAction) for item in response.actions)
     return {
         "maintained": sum(isinstance(item, MaintainAction) for item in response.actions),
         "new_actions": sum(isinstance(item, NewAction) for item in response.actions),
         "modified": sum(isinstance(item, ModifiedAction) for item in response.actions),
+        "step_actions": step,
+        "with_dependencies": sum(
+            1 for item in response.actions if isinstance(item, StepAction) and item.depends_on
+        ),
         "commit_group": new_group,
     }

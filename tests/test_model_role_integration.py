@@ -19,14 +19,13 @@ from sceneweave.roles.model_role import ModelRole
 
 from .fakes import FakeSemanticWorld, ScriptedSampler, ScriptedTranslator, ms, rid
 
-S1_GO = '{"reconsider": true, "note": "门被推开，需要行动"}'
-S1_SKIP = '{"reconsider": false, "note": "没有新情况"}'
-S2 = '{"intention": "查看书桌上的东西", "abandon": []}'
-S2_AGAIN = '{"intention": "查看书桌上的东西", "abandon": []}'
-S3_IMPOSSIBLE = (
-    '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["不可能地隔空取物"]}'
-)
-S3_WALK = '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}'
+S1_GO = '{"route": "rethink", "note": "门被推开，需要行动"}'
+S1_SKIP = '{"route": "continue", "note": "没有新情况"}'
+S2 = '{"intention": "查看书桌上的东西"}'
+S2_AGAIN = '{"intention": "查看书桌上的东西"}'
+S3_IMPOSSIBLE = '[{"kind": "grasp", "target": "不可能地隔空取物", "effector": "right_hand"}]'
+S3_WALK = '[{"kind": "move", "destination": {"entity": "书桌"}}]'
+WALK_DISPLAY = "移动到 实体 书桌（walk）"
 
 
 def build_log_and_tracer() -> tuple[structured_logging.SimulationLog, SimulationLogTracer]:
@@ -52,31 +51,28 @@ def test_end_to_end_model_role_with_scheduler_and_log_chain() -> None:
         scheduler = Scheduler(
             roles=[role],
             world=world,
-            translator=ScriptedTranslator(plans={"走向书桌": (1000, 2000, ())}),
+            translator=ScriptedTranslator(plans={WALK_DISPLAY: (1000, 2000, ())}),
             config=RunConfig(introspection_interval=ms(10_000), max_duration=ms(10_000)),
             initial_events=[WorldEvent(EventId("door"), SimulationTime(0), "门被推开")],
             tracer=tracer,
         )
         result = await scheduler.run()
         assert result.reason is RunStopReason.TIME_LIMIT
-        # 声明真实进入登记与结算：World 打回后角色重做并被接受。
         facts = "；".join(world.facts)
-        assert "走向书桌" in facts, "重做后的新行动真实开始与结算"
+        assert "书桌" in facts, "重做后的新动作真实开始与结算"
         assert "不可能" not in facts, "被打回的候选未生效"
         record = scheduler.action_records()
         assert len(record) == 1
         [only] = record.values()
         assert only.phase is ActionPhase.COMPLETED
         assert only.role_id == "lin"
-        # 感知只投递一次：角色 perceive 次数等于真实事件周期数。
-        # 阶段日志沿同一因果链可检索：含模型原始输入/输出。
         stages = {entry.component_name for entry in log.entries}
         assert {
             "system1.decide",
             "system2.intend",
             "system3.declare",
             "role.response",
-            "world.check",
+            "engine.chain_checked",
             "registration.commit",
             "world.commit",
         } <= stages
@@ -91,8 +87,7 @@ def test_end_to_end_model_role_with_scheduler_and_log_chain() -> None:
             for e in log.get_entries_by_component("system3.declare")
         ]
         assert any("不可能地隔空取物" in item["outputs"][0] for item in s3)
-        assert any("走向书桌" in item["outputs"][0] for item in s3)
-        # 真实 StepData 呈现模型角色的完整主动声明。
+        assert any("书桌" in item["outputs"][0] for item in s3)
         report = scheduler.last_report
         assert report is not None
         data = step_data_from_report(report)
@@ -123,7 +118,6 @@ def test_cross_role_parallel_sampling_with_frozen_clock() -> None:
             initial_events=[WorldEvent(EventId("door"), SimulationTime(0), "门被推开")],
         )
         task = asyncio.create_task(scheduler.run())
-        # 两个角色的 System1 同时在采样器中等待：跨角色并行。
         for _ in range(2000):
             if sampler.in_flight >= 2:
                 break
@@ -135,28 +129,24 @@ def test_cross_role_parallel_sampling_with_frozen_clock() -> None:
         gate.set()
         result = await task
         assert result.reason is RunStopReason.TIME_LIMIT
-        # 两个角色都完成了本轮（各自跳过：显式空声明）。
         assert alice.memory_notes() and bob.memory_notes()
 
     asyncio.run(scenario())
 
 
 def test_model_role_survives_withdrawal_and_reregistration() -> None:
-    """模型角色跨周期：新增→维持→完成后再次新增，身份不复用。"""
+    """模型角色跨周期：新增→重声明→完成后再次新增，身份不复用。"""
 
     async def scenario() -> None:
         log, tracer = build_log_and_tracer()
         sampler = ScriptedSampler(
             {
-                # 周期：t=0 新增、t=1000 维持、t=2000 完成+再新增、
-                # t=3000/4000/10000 跳过（维持/空由对齐决定）。
                 "system1": [S1_GO, S1_GO, S1_GO, S1_SKIP, S1_SKIP, S1_SKIP],
                 "system2": [S2, S2, S2],
                 "system3": [
                     S3_WALK,
-                    '{"feasible": true, "maintain": ["a-lin-1"], "modify": [], "new_actions": []}',
-                    '{"feasible": true, "maintain": [], "modify": [],'
-                    ' "new_actions": ["再次走向书桌"]}',
+                    '[{"id": "a-lin-1", "kind": "move", "destination": {"entity": "书桌"}}]',
+                    S3_WALK,
                 ],
             }
         )
@@ -165,9 +155,7 @@ def test_model_role_survives_withdrawal_and_reregistration() -> None:
         scheduler = Scheduler(
             roles=[role],
             world=world,
-            translator=ScriptedTranslator(
-                plans={"走向书桌": (1000, 1000, ()), "再次走向书桌": (1000, 1000, ())}
-            ),
+            translator=ScriptedTranslator(plans={WALK_DISPLAY: (1000, 1000, ())}),
             config=RunConfig(introspection_interval=ms(10_000), max_duration=ms(10_000)),
             initial_events=[WorldEvent(EventId("door"), SimulationTime(0), "门被推开")],
             tracer=tracer,
@@ -179,8 +167,7 @@ def test_model_role_survives_withdrawal_and_reregistration() -> None:
         assert ids == ["a-lin-1", "a-lin-2"], "新身份不复用"
         assert all(record.phase is ActionPhase.COMPLETED for record in records.values())
         facts = "；".join(world.facts)
-        assert "走向书桌" in facts and "再次走向书桌" in facts
-        # 角色私人认知不进入世界事实或他人感知（单角色场景下核对事实文本）。
+        assert facts.count("书桌") >= 2
         assert "需要行动" not in facts, "认知说明未混入客观事实"
 
     asyncio.run(scenario())

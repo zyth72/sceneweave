@@ -84,7 +84,7 @@ def _add_component(
         "cycle_id": f"cycle-{step + 1}",
         "simulation_time_ms": step * 100,
         "Prompt": _long_text("提示"),
-        "Response": '{"reconsider": true, "note": "更新认识"}',
+        "Response": '{"route": "rethink", "note": "更新认识"}',
     }
     payload.update(raw)
     log.add_entry(
@@ -223,7 +223,7 @@ def test_new_model_log_changes_version_and_appears_without_new_steps() -> None:
         scope="role:shen",
         role_id="shen",
         component="system1",
-        raw={"Response": '{"reconsider": false, "note": "保持"}'},
+        raw={"Response": '{"route": "continue", "note": "保持"}'},
     )
     after = build_snapshot(history, log)
     assert after["version"] != before["version"], "日志增长必须改变版本"
@@ -249,7 +249,7 @@ def test_completion_during_log_capture_keeps_polling_until_all_calls_visible(
             scope="role:lin",
             role_id="lin",
             component="system1",
-            raw={"Response": '{"reconsider": false, "note": "最后一次判断"}'},
+            raw={"Response": '{"route": "continue", "note": "最后一次判断"}'},
         )
         history.record_step(
             {"step": 1, "entity_logs": {"diagnostics": {"stop_reason": "time_limit"}}}
@@ -274,12 +274,16 @@ def test_call_summaries_from_real_answer_fields() -> None:
     history = RunSnapshotHistory()
     log = structured_logging.SimulationLog()
     cases = (
-        ("system1", '{"reconsider": false, "note": "无需改变"}', "重新考虑：否；说明：无需改变"),
-        ("system2", '{"intention": "走过去", "abandon": []}', "意向：走过去；放弃：0 项"),
+        (
+            "system1",
+            '{"route": "continue", "note": "无需改变"}',
+            "分流：沿用已保存计划；说明：无需改变",
+        ),
+        ("system2", '{"intention": "走过去"}', "意向：走过去"),
         (
             "system3",
-            '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走过去"]}',
-            "可行：是；维持 0 项；修改 0 项；新增 1 项",
+            '[{"kind": "wait"}]',
+            "结构化动作计划：1 个动作",
         ),
         (
             "world-check",
@@ -293,10 +297,10 @@ def test_call_summaries_from_real_answer_fields() -> None:
         ),
         (
             "translator",
-            '{"schedules": [], "modified_schedules": []}',
-            "新安排 0 项；修改安排 0 项",
+            '{"schedules": []}',
+            "新安排 0 项",
         ),
-        ("system1", '{"reconsider": true}', "回答为 JSON 对象；展开可查看原始回答。"),
+        ("system1", '{"route": "rethink"}', "回答为 JSON 对象；展开可查看原始回答。"),
         ("system2", "不是JSON", "回答不是合法 JSON；展开可查看原始回答。"),
     )
     for index, (component, response, expected) in enumerate(cases):

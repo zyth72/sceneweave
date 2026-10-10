@@ -265,7 +265,7 @@ def _payloads() -> dict[str, Any]:
         phase="system1",
         summary_text="重新考虑：否；说明：<img src=x onerror=window.__xss=1>",
         prompt="<script>window.__xss=2</script>提示原文",
-        response='{"reconsider": false, "note": "<img src=x onerror=window.__xss=1>"}',
+        response='{"route": "continue", "note": "<img src=x onerror=window.__xss=1>"}',
     )
     error_call = _call(
         1,
@@ -714,7 +714,7 @@ def _view_payloads() -> dict[str, Any]:
                 phase="system1",
                 summary_text="林舟摘要",
                 prompt="SECRET_PROMPT_LIN",
-                response='{"reconsider": false, "note": "x"}',
+                response='{"route": "continue", "note": "x"}',
             ),
             _call(
                 1,
@@ -722,7 +722,7 @@ def _view_payloads() -> dict[str, Any]:
                 phase="system1",
                 summary_text="沈言摘要",
                 prompt="SECRET_PROMPT_SHEN",
-                response='{"reconsider": true, "note": "y"}',
+                response='{"route": "rethink", "note": "y"}',
             ),
             _call(
                 2,

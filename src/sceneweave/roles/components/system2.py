@@ -1,9 +1,9 @@
-"""System2：决定意向（保持、改变或放弃）。
+"""System2：决定意向。
 
-System2 在角色内部串行编排：基于认知、动机与处境选择当前意向，可
-保持原意向、改变目标或放弃若干已有行动对应的意向；放弃只影响自身
-后续声明，不宣布世界事实。World 打回原因与 System3 的不可行反馈都
-作为上下文传入，供重新选择参考。
+System2 只产出当前主观意向：想达成什么，或者保持、改变原有意向。
+它不负责物理可执行性，也不输出行动身份或放弃指令——具体做什么、
+能否做到由 System3 与 World 负责。World 打回原因与 System3 的不可行
+反馈都作为上下文传入，供重新选择参考。
 """
 
 from sceneweave.domain.identity import ResponseId
@@ -16,7 +16,7 @@ from sceneweave.roles.model_output import (
     parse_system2_intention,
 )
 
-SCHEMA = '{"intention": "非空的当前意向", "abandon": ["要放弃的行动身份", ...]}'
+SCHEMA = '{"intention": "非空的当前意向"}'
 
 
 def build_prompt(
@@ -45,7 +45,7 @@ def build_prompt(
         *known,
         "私人认知（近期记忆）：",
         *notes,
-        "自身可继续主动维持的行动：",
+        "自身仍在主动维持的行动：",
         *actions,
     ]
     if previous_intention is not None:
@@ -58,11 +58,9 @@ def build_prompt(
         lines.append("请据此重新选择或调整意向。")
     lines += [
         "第二步：决定你现在的意向（保持、改变或放弃）。",
-        "abandon 只能填写上方“自身可继续主动维持的行动”中实际出现的行动身份：不得填中文描述、"
-        "不得新造身份，也不得填其他角色的行动身份。",
-        "没有可继续主动维持的行动时，abandon 必须为空数组；被打回但尚未接受的新提案不是既有行动，"
-        "调整意向时直接在 intention 里说明，不要为它虚构身份来 abandon。",
-        "只输出一个 JSON 对象，只含这两个字段，格式：",
+        "你只负责想要什么：不宣布世界里已经发生什么，也不决定能不能做到、具体怎么做；"
+        "物理可执行性与行动身份由后续阶段负责。",
+        "只输出一个 JSON 对象，只含 intention 一个字段，格式：",
         SCHEMA,
     ]
     return "\n".join(lines)
@@ -127,9 +125,6 @@ async def run(
         "System2 选定意向",
         prompt=prompt,
         raw_output=raw,
-        details={
-            "intention": intention.intention,
-            "abandon": "、".join(str(item) for item in intention.abandon),
-        },
+        details={"intention": intention.intention},
     )
     return intention

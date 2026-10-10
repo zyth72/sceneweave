@@ -129,24 +129,24 @@ def _call_summary(component: str, item: dict[str, Any]) -> str:
     except TypeError, ValueError:
         return "回答不是合法 JSON；展开可查看原始回答。"
     if not isinstance(data, dict):
+        if component == "system3" and isinstance(data, list):
+            return f"结构化动作计划：{len(data)} 个动作"
         return "回答不是 JSON 对象；展开可查看原始回答。"
     if component == "system1":
-        if isinstance(data.get("reconsider"), bool) and isinstance(data.get("note"), str):
-            verdict = "是" if data["reconsider"] else "否"
-            return f"重新考虑：{verdict}；说明：{_short(data['note'])}"
+        if isinstance(data.get("route"), str) and isinstance(data.get("note"), str):
+            labels = {
+                "continue": "沿用已保存计划",
+                "replan": "保留意向重新落实",
+                "rethink": "重选意向",
+            }
+            route = labels.get(data["route"], data["route"])
+            return f"分流：{route}；说明：{_short(data['note'])}"
     elif component == "system2":
-        if isinstance(data.get("intention"), str) and isinstance(data.get("abandon"), list):
-            return f"意向：{_short(data['intention'])}；放弃：{len(data['abandon'])} 项"
+        if isinstance(data.get("intention"), str):
+            return f"意向：{_short(data['intention'])}"
     elif component == "system3":
-        keys = ("maintain", "modify", "new_actions")
-        if isinstance(data.get("feasible"), bool) and all(
-            isinstance(data.get(key), list) for key in keys
-        ):
-            verdict = "是" if data["feasible"] else "否"
-            return (
-                f"可行：{verdict}；维持 {len(data['maintain'])} 项；"
-                f"修改 {len(data['modify'])} 项；新增 {len(data['new_actions'])} 项"
-            )
+        if data.get("error") == "intention_unfulfillable" and isinstance(data.get("reason"), str):
+            return f"意向不可落实：{_short(data['reason'])}"
     elif component == "world-check":
         if isinstance(data.get("passed"), bool) and isinstance(data.get("reason"), str):
             verdict = "通过" if data["passed"] else "未通过"
@@ -175,12 +175,11 @@ def _call_summary(component: str, item: dict[str, Any]) -> str:
         if present:
             return "；".join(f"{label} {len(items)} 项" for label, items in present)
     elif component == "translator":
-        if isinstance(data.get("schedules"), list) and isinstance(
-            data.get("modified_schedules"), list
-        ):
-            return (
-                f"新安排 {len(data['schedules'])} 项；修改安排 {len(data['modified_schedules'])} 项"
-            )
+        if isinstance(data.get("schedules"), list):
+            parts = [f"新安排 {len(data['schedules'])} 项"]
+            if isinstance(data.get("modified_schedules"), list):
+                parts.append(f"修改安排 {len(data['modified_schedules'])} 项")
+            return "；".join(parts)
     return "回答为 JSON 对象；展开可查看原始回答。"
 
 

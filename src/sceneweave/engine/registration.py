@@ -1,19 +1,27 @@
 """登记前对行动时间安排的纯校验。
 
-校验只判断结构、引用与时间约束，不实现翻译模型、调度队列或完整
-行动状态机；失败逐条报告，不拆组、不部分接受。问题分两类：结构
-不一致（引用错误、缺安排、提交组关联错误）属于运行错误，停止推进
-并保存现场；时间安排不合业务约束（开始晚于当前时刻、组内共同非零
-交集、历史不可改写）走打回接口让角色重新决定。新行动与修改声明的
-约束不同：新行动构成并行组并须满足共同非零时间交集；修改只能调整
-未来节点，历史开始与已过过程节点不可改写。
+校验只判断结构、引用、依赖与时间约束，不实现翻译模型、调度队列或完整
+行动状态机；失败逐条报告，不拆组、不部分接受。问题分两类：结构不一致
+（引用错误、缺安排、依赖未定义/循环）属于运行错误，停止推进并保存现场；
+时间安排不合业务约束（开始晚于当前时刻、历史不可改写）走打回接口让角色
+重新决定。
+
+协议纠正后，结构化 ``StepAction`` 使用平坦的逐动作时间安排：每个动作
+只有自己的 start/expected_end/checkpoints 约束，不再要求整组共同非零
+时间交集；可选依赖由引擎在运行时按 World 真实完成门控。旧的三类声明
+（新增/修改）仍按其原约束校验，仅服务低层历史测试。
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from sceneweave.domain.identity import ActionId
-from sceneweave.domain.messages import ModifiedAction, NewAction, RoleResponse
+from sceneweave.domain.messages import (
+    ModifiedAction,
+    NewAction,
+    RoleResponse,
+    StepAction,
+)
 from sceneweave.domain.time import SimulationTime, validate_simulation_time
 from sceneweave.domain.translation import (
     ActionArrangement,
@@ -63,14 +71,7 @@ def registration_issues(
     current_time: SimulationTime,
     arrangements: Mapping[ActionId, ActionArrangement] | tuple[ActionArrangement, ...] = (),
 ) -> tuple[RegistrationIssue, ...]:
-    """逐条返回登记前问题；空元组表示可以通过登记。
-
-    新行动覆盖：引用一致性、提交组一致性、新行动完整性、开始时刻
-    晚于当前时刻、结束晚于开始、过程节点合法，以及组内共同非零时间
-    交集（max(组内开始) < min(组内结束)，仅端点相接不满足）。修改
-    行动覆盖：与既有安排一一对应、历史不可改写、修改后的结束晚于
-    当前时刻。修改不参与新组交集约束。
-    """
+    """逐条返回登记前问题；空元组表示可以通过登记。"""
     if not isinstance(response, RoleResponse):
         raise ValueError("登记校验的响应必须是 RoleResponse")
     if not isinstance(translation, TranslationResult):
@@ -99,6 +100,9 @@ def registration_issues(
         response.response_id,
     ):
         structural("翻译结果必须关联同一响应")
+    step_actions: dict[ActionId, StepAction] = {
+        item.action_id: item for item in response.actions if isinstance(item, StepAction)
+    }
     new_actions: dict[ActionId, NewAction] = {
         item.action_id: item for item in response.actions if isinstance(item, NewAction)
     }
@@ -111,10 +115,23 @@ def registration_issues(
     modified_schedules: dict[ActionId, ModifiedActionSchedule] = {
         schedule.action_id: schedule for schedule in translation.modified_schedules
     }
+    step_new = {action_id for action_id in step_actions if action_id not in known}
+    step_existing = set(step_actions) - step_new
+    # ---- 结构化 StepAction：平坦、逐动作时间安排与依赖 ----
+    for action_id in sorted(step_new - set(schedules)):
+        structural(f"新动作缺少时间安排：{action_id}")
+    for action_id in sorted(set(schedules) - step_new - set(new_actions)):
+        structural(f"时间安排引用了非本次新行动：{action_id}")
+    for action_id in sorted(step_new & set(schedules)):
+        schedule = schedules[action_id]
+        if schedule.start <= current_time:
+            timing(f"新动作开始时刻必须晚于当前时刻：{action_id}")
+    for action_id in sorted(step_existing & set(schedules)):
+        structural(f"既有行动不得借新动作时间安排重排：{action_id}")
+    _check_step_dependencies(step_actions, known, structural)
+    # ---- 旧三类声明：保留原有约束（仅低层历史测试路径） ----
     for action_id in sorted(set(new_actions) - set(schedules)):
         structural(f"新行动缺少时间安排：{action_id}")
-    for action_id in sorted(set(schedules) - set(new_actions)):
-        structural(f"时间安排引用了非本次新行动：{action_id}")
     for action_id in sorted(set(schedules) & set(new_actions)):
         schedule = schedules[action_id]
         if schedule.commit_group_id != new_actions[action_id].commit_group_id:
@@ -131,9 +148,13 @@ def registration_issues(
             continue
         if schedule.start <= current_time:
             timing(f"新行动开始时刻必须晚于当前时刻：{action_id}")
-    starts = [schedule.start for schedule in schedules.values()]
-    ends = [schedule.expected_end for schedule in schedules.values()]
-    if starts and max(starts) >= min(ends):
+    legacy_starts = [
+        schedules[action_id].start for action_id in new_actions if action_id in schedules
+    ]
+    legacy_ends = [
+        schedules[action_id].expected_end for action_id in new_actions if action_id in schedules
+    ]
+    if legacy_starts and max(legacy_starts) >= min(legacy_ends):
         timing("并行组内行动必须有共同非零时间交集：max(开始) < min(结束)")
     for action_id in sorted(set(modified_actions) - set(modified_schedules)):
         structural(f"修改声明缺少未来时间安排：{action_id}")
@@ -157,6 +178,49 @@ def registration_issues(
         if modified_schedule.expected_end <= current_time:
             timing(f"修改后的预计结束必须晚于当前时刻：{action_id}")
     return tuple(issues)
+
+
+def _check_step_dependencies(
+    step_actions: Mapping[ActionId, StepAction],
+    known: Mapping[ActionId, ActionArrangement],
+    structural: Callable[[str], None],
+) -> None:
+    """校验结构化依赖：引用必须已知；本声明内不得成环。"""
+    declared = set(step_actions)
+    edges: dict[ActionId, list[ActionId]] = {}
+    for action_id, step in step_actions.items():
+        for dep in step.depends_on:
+            if dep not in known and dep not in declared:
+                structural(f"依赖引用了未定义的动作：{dep}")
+                continue
+            if dep == action_id:
+                structural(f"动作不能依赖自身：{action_id}")
+                continue
+            if dep in declared:
+                edges.setdefault(action_id, []).append(dep)
+    _reject_dependency_cycles(declared, edges, structural)
+
+
+def _reject_dependency_cycles(
+    nodes: set[ActionId],
+    edges: Mapping[ActionId, list[ActionId]],
+    structural: Callable[[str], None],
+) -> None:
+    state: dict[ActionId, int] = {node: 0 for node in nodes}
+
+    def visit(node: ActionId, path: list[ActionId]) -> None:
+        state[node] = 1
+        for nxt in edges.get(node, []):
+            if state.get(nxt) == 1:
+                structural(f"依赖存在循环：{'→'.join(str(x) for x in path + [nxt])}")
+                return
+            if state.get(nxt) == 0:
+                visit(nxt, path + [nxt])
+        state[node] = 2
+
+    for node in sorted(nodes, key=str):
+        if state[node] == 0:
+            visit(node, [node])
 
 
 def registration_problems(

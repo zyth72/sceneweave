@@ -587,7 +587,7 @@ def test_report_omits_repeated_role_prompts_but_retains_actual_observations_and_
             simulation_time=SimulationTime(100),
             summary="判断完成",
             inputs=("重复角色提示词",),
-            outputs=('{"reconsider":false,"note":"完整认知说明"}',),
+            outputs=('{"route": "continue","note":"完整认知说明"}',),
         ),
     ]
     report = build_evidence_report(_scene(), records, _summary(), incomplete=False)

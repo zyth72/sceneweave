@@ -48,22 +48,19 @@ def setup_config(tmp_path: Path) -> Path:
 SCRIPTS = {
     "role:lin": {
         "system1": [
-            '{"reconsider": true, "note": "开始行动"}',
+            '{"route": "rethink", "note": "开始行动"}',
         ]
-        + ['{"reconsider": false, "note": "继续"}'] * 10,
-        "system2": ['{"intention": "走到书桌旁", "abandon": []}'],
-        "system3": [
-            '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}'
-        ],
+        + ['{"route": "continue", "note": "继续"}'] * 10,
+        "system2": ['{"intention": "走到书桌旁"}'],
+        "system3": ['[{"kind": "move", "destination": {"entity": "书桌"}, "mode": "walk"}]'],
     },
     "role:shen": {
-        "system1": ['{"reconsider": false, "note": "照旧"}'] * 11,
+        "system1": ['{"route": "continue", "note": "照旧"}'] * 11,
     },
     "translator:lin": {
         "translator": [
-            '{"schedules": [{"action_id": "a-lin-1", "commit_group_id": "g-lin-1",'
-            ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}],'
-            ' "modified_schedules": []}'
+            '{"schedules": [{"action_id": "a-lin-1",'
+            ' "start": 1000, "expected_end": 4000, "checkpoints": [2500]}]}'
         ]
     },
     "translator:shen": {},

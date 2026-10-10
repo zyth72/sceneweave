@@ -27,15 +27,14 @@ from sceneweave.integrations.concordia.tracing import SimulationLogTracer
 from sceneweave.roles.model_role import ModelRole
 from sceneweave.translator.model_translator import ModelTranslator
 
-S1_GO = '{"reconsider": true, "note": "门被推开，需要行动"}'
-S1_SKIP = '{"reconsider": false, "note": "没有新情况"}'
-S2 = '{"intention": "查看书桌上的东西", "abandon": []}'
-S3_WALK = '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}'
+S1_GO = '{"route": "rethink", "note": "门被推开，需要行动"}'
+S1_SKIP = '{"route": "continue", "note": "没有新情况"}'
+S2 = '{"intention": "查看书桌上的东西"}'
+S3_WALK = '[{"kind": "move", "destination": {"entity": "书桌"}}]'
 # 行动身份由角色分配（a-lin_zhou-1）——脚本假件按该身份返回安排。
 TRANSLATION = (
-    '{"schedules": [{"action_id": "a-lin_zhou-1", "commit_group_id": "g-lin_zhou-1",'
-    ' "start": 2000, "expected_end": 6000, "checkpoints": [4000]}],'
-    ' "modified_schedules": []}'
+    '{"schedules": [{"action_id": "a-lin_zhou-1",'
+    ' "start": 2000, "expected_end": 6000, "checkpoints": [4000]}]}'
 )
 
 

@@ -16,7 +16,7 @@ from sceneweave.domain.adjudication import (
 from sceneweave.domain.identity import ActionId, CycleId, EventId, RoleId, WorldStateVersion
 from sceneweave.domain.messages import ActionCheckResult, Delivery, RoleResponse, WorldEvent
 from sceneweave.domain.time import SimulationTime
-from sceneweave.domain.translation import ActionArrangement
+from sceneweave.domain.translation import ActionArrangement, ActionSchedule
 
 
 class World(ABC):
@@ -68,7 +68,11 @@ class World(ABC):
 
     @abstractmethod
     async def check_response(
-        self, response: RoleResponse, *, arrangements: Sequence[ActionArrangement] = ()
+        self,
+        response: RoleResponse,
+        *,
+        arrangements: Sequence[ActionArrangement] = (),
+        schedules: Sequence[ActionSchedule] = (),
     ) -> ActionCheckResult:
         """对完整主动行为声明的无副作用检查。
 

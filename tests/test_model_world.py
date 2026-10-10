@@ -196,7 +196,7 @@ class Brain:
                 outcomes.append(
                     {"action_id": action, "result": "started", "detail": "行动实际开始"}
                 )
-                if "走" in line or "拿" in line or "取" in line:
+                if "走" in line or "拿" in line or "取" in line or "移动" in line:
                     movements.append(
                         {
                             "action_id": action,
@@ -214,7 +214,7 @@ class Brain:
                     {"action_id": action, "result": "completed", "detail": "按事实完成"}
                 )
                 stop.append(action)
-                if "抽屉" in line:
+                if "抽屉" in line or "drawer" in line:
                     changes.append(
                         {
                             "kind": "set_state",

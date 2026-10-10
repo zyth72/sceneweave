@@ -321,26 +321,22 @@ def test_scheduler_rejects_bad_timing_via_role_single_perceive() -> None:
     """合法结构但时间不合约束：经引擎 rejected 重试，单次 perceive。"""
 
     async def scenario() -> None:
-        bad = (
-            '{"schedules": [{"action_id": "a-lin-1", "commit_group_id": "g-lin-1",'
-            ' "start": 0, "expected_end": 6000}], "modified_schedules": []}'
-        )
+        bad = '{"schedules": [{"action_id": "a-lin-1", "start": 0, "expected_end": 6000}]}'
         good = (
-            '{"schedules": [{"action_id": "a-lin-2", "commit_group_id": "g-lin-2",'
-            ' "start": 2000, "expected_end": 6000, "checkpoints": [4000]}],'
-            ' "modified_schedules": []}'
+            '{"schedules": [{"action_id": "a-lin-2",'
+            ' "start": 2000, "expected_end": 6000, "checkpoints": [4000]}]}'
         )
         role_sampler = ScriptedSampler(
             {
-                "system1": ['{"reconsider": true, "note": "行动"}']
-                + ['{"reconsider": false, "note": "照旧"}'] * 6,
+                "system1": ['{"route": "rethink", "note": "行动"}']
+                + ['{"route": "continue", "note": "照旧"}'] * 6,
                 "system2": [
-                    '{"intention": "去书桌", "abandon": []}',
-                    '{"intention": "去书桌", "abandon": []}',
+                    '{"intention": "去书桌"}',
+                    '{"intention": "去书桌"}',
                 ],
                 "system3": [
-                    '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}',
-                    '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}',
+                    '[{"kind": "move", "destination": {"entity": "书桌"}}]',
+                    '[{"kind": "move", "destination": {"entity": "书桌"}}]',
                 ],
             }
         )
@@ -395,16 +391,19 @@ def test_translation_wait_freezes_clock_and_queue() -> None:
         gate = asyncio.Event()
         role_sampler = ScriptedSampler(
             {
-                "system1": ['{"reconsider": true, "note": "行动"}']
-                + ['{"reconsider": false, "note": "照旧"}'] * 6,
-                "system2": ['{"intention": "去窗户", "abandon": []}'],
-                "system3": [
-                    '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向窗户"]}'
-                ],
+                "system1": ['{"route": "rethink", "note": "行动"}']
+                + ['{"route": "continue", "note": "照旧"}'] * 6,
+                "system2": ['{"intention": "去窗户"}'],
+                "system3": ['[{"kind": "move", "destination": {"entity": "窗户"}}]'],
             }
         )
         translator_sampler = ScriptedSampler(
-            {"translator": [VALID_NEW.replace("a-1", "a-lin-1").replace("g-1", "g-lin-1")]},
+            {
+                "translator": [
+                    '{"schedules": [{"action_id": "a-lin-1",'
+                    ' "start": 2000, "expected_end": 6000, "checkpoints": [3000, 5000]}]}'
+                ]
+            },
             gate=gate,
         )
         role = ModelRole(rid("lin"), role_sampler)
@@ -438,17 +437,17 @@ def test_end_to_end_model_role_translator_stepdata_and_log() -> None:
     async def scenario() -> None:
         log = structured_logging.SimulationLog()
         tracer = SimulationLogTracer(log, wall_clock=lambda: "2026-01-01T00:00:00+00:00")
-        walk_plan = '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}'
+        walk_plan = '[{"kind": "move", "destination": {"entity": "书桌"}}]'
         role_sampler = ScriptedSampler(
             {
                 "system1": [
-                    '{"reconsider": true, "note": "门开了"}',
-                    '{"reconsider": false, "note": "继续"}',
-                    '{"reconsider": false, "note": "继续"}',
-                    '{"reconsider": false, "note": "继续"}',
-                    '{"reconsider": false, "note": "继续"}',
+                    '{"route": "rethink", "note": "门开了"}',
+                    '{"route": "continue", "note": "继续"}',
+                    '{"route": "continue", "note": "继续"}',
+                    '{"route": "continue", "note": "继续"}',
+                    '{"route": "continue", "note": "继续"}',
                 ],
-                "system2": ['{"intention": "查看书桌", "abandon": []}'],
+                "system2": ['{"intention": "查看书桌"}'],
                 "system3": [walk_plan],
             }
         )
@@ -456,9 +455,7 @@ def test_end_to_end_model_role_translator_stepdata_and_log() -> None:
             {
                 "translator": [
                     '{"schedules": [{"action_id": "a-lin-1",'
-                    ' "commit_group_id": "g-lin-1", "start": 1000,'
-                    ' "expected_end": 3000, "checkpoints": [2000]}],'
-                    ' "modified_schedules": []}'
+                    ' "start": 1000, "expected_end": 3000, "checkpoints": [2000]}]}'
                 ]
             }
         )
@@ -483,14 +480,14 @@ def test_end_to_end_model_role_translator_stepdata_and_log() -> None:
             dict(log.reconstruct_value(e.deduplicated_data))
             for e in log.get_entries_by_component("translator.invoke")
         ]
-        assert any("走向书桌" in i["inputs"][0] for i in invoke), "原始提示全量入日志"
+        assert any("书桌" in i["inputs"][0] for i in invoke), "原始提示全量入日志"
         parsed = [
             dict(log.reconstruct_value(e.deduplicated_data))
             for e in log.get_entries_by_component("translator.parsed")
         ]
         assert any("a-lin-1" in o for p in parsed for o in p["outputs"])
         assert any('"checkpoints": [2000]' in p["outputs"][0] for p in parsed)
-        assert any("组 g-lin-1" in o and "节点[2000]" in o for p in parsed for o in p["outputs"])
+        assert any("节点[2000]" in o for p in parsed for o in p["outputs"])
         report = scheduler.last_report
         assert report is not None
         data = step_data_from_report(report)
@@ -539,16 +536,15 @@ def test_real_concordia_bridge_logs_translator_raw_io() -> None:
     async def scenario() -> None:
         from .test_concordia_sampling import StubModel
 
-        walk_plan = '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向窗户"]}'
+        walk_plan = '[{"kind": "move", "destination": {"entity": "窗户"}}]'
         schedule_json = (
-            '{"schedules": [{"action_id": "a-lin-1", "commit_group_id": "g-lin-1",'
-            ' "start": 1000, "expected_end": 3000}], "modified_schedules": []}'
+            '{"schedules": [{"action_id": "a-lin-1", "start": 1000, "expected_end": 3000}]}'
         )
-        skips = ['{"reconsider": false, "note": "照旧"}'] * 8
+        skips = ['{"route": "continue", "note": "照旧"}'] * 8
         model = StubModel(
             [
-                '{"reconsider": true, "note": "行动"}',
-                '{"intention": "x", "abandon": []}',
+                '{"route": "rethink", "note": "行动"}',
+                '{"intention": "x"}',
                 walk_plan,
                 schedule_json,
                 *skips,
@@ -594,16 +590,13 @@ def test_scoped_record_replay_reproduces_parallel_two_role_run(tmp_path) -> None
             return ScriptedSampler(
                 {
                     "system1": [
-                        '{"reconsider": true, "note": "' + name + ' 行动"}',
-                        '{"reconsider": false, "note": "照旧"}',
-                        '{"reconsider": false, "note": "照旧"}',
-                        '{"reconsider": false, "note": "照旧"}',
+                        '{"route": "rethink", "note": "' + name + ' 行动"}',
+                        '{"route": "continue", "note": "照旧"}',
+                        '{"route": "continue", "note": "照旧"}',
+                        '{"route": "continue", "note": "照旧"}',
                     ],
-                    "system2": ['{"intention": "看窗户", "abandon": []}'],
-                    "system3": [
-                        '{"feasible": true, "maintain": [], "modify": [],'
-                        ' "new_actions": ["走向窗户"]}'
-                    ],
+                    "system2": ['{"intention": "看窗户"}'],
+                    "system3": ['[{"kind": "move", "destination": {"entity": "窗户"}}]'],
                 }
             )
 
@@ -613,8 +606,7 @@ def test_scoped_record_replay_reproduces_parallel_two_role_run(tmp_path) -> None
                 {
                     "translator": [
                         '{"schedules": [{"action_id": "a-' + name + '-1",'
-                        ' "commit_group_id": "g-' + name + '-1", "start": 1000,'
-                        ' "expected_end": 3000}], "modified_schedules": []}'
+                        ' "start": 1000, "expected_end": 3000}]}'
                     ]
                 }
             )
@@ -637,16 +629,13 @@ def test_scoped_record_replay_reproduces_parallel_two_role_run(tmp_path) -> None
             lambda scope: ScriptedSampler(
                 {
                     "system1": [
-                        '{"reconsider": true, "note": "x"}',
-                        '{"reconsider": false, "note": "y"}',
-                        '{"reconsider": false, "note": "y"}',
-                        '{"reconsider": false, "note": "y"}',
+                        '{"route": "rethink", "note": "x"}',
+                        '{"route": "continue", "note": "y"}',
+                        '{"route": "continue", "note": "y"}',
+                        '{"route": "continue", "note": "y"}',
                     ],
-                    "system2": ['{"intention": "看窗户", "abandon": []}'],
-                    "system3": [
-                        '{"feasible": true, "maintain": [], "modify": [],'
-                        ' "new_actions": ["走向窗户"]}'
-                    ],
+                    "system2": ['{"intention": "看窗户"}'],
+                    "system3": ['[{"kind": "move", "destination": {"entity": "窗户"}}]'],
                 }
             ),
             directory,
@@ -658,10 +647,7 @@ def test_scoped_record_replay_reproduces_parallel_two_role_run(tmp_path) -> None
                         "translator": [
                             '{"schedules": [{"action_id": "a-'
                             + scope.split("-", 1)[1]
-                            + '-1", "commit_group_id": "g-'
-                            + scope.split("-", 1)[1]
-                            + '-1", "start": 1000, "expected_end": 3000}],'
-                            ' "modified_schedules": []}'
+                            + '-1", "start": 1000, "expected_end": 3000}]}'
                         ]
                     }
                 ),
@@ -896,80 +882,49 @@ def test_prompt_shows_actor_and_arrangement_descriptions() -> None:
     asyncio.run(scenario())
 
 
-def test_scheduler_started_action_modification_keeps_history() -> None:
-    """已开始行动在 now>start 的明确修改：保留历史与进展、未来新节点。"""
+def test_scheduler_redeclaration_preserves_identity_and_history() -> None:
+    """重声明同一动作：身份/开始/进展/时序保留，不重译、不重启。"""
 
     async def scenario() -> None:
-
         collector = Collector()
         raw_first = (
-            '{"schedules": [{"action_id": "a-lin-1", "commit_group_id": "g-lin-1",'
-            ' "start": 1000, "expected_end": 4000, "checkpoints": [2000]}],'
-            ' "modified_schedules": []}'
-        )
-        raw_modify = (
-            '{"schedules": [], "modified_schedules": [{"action_id": "a-lin-1",'
-            ' "start": 1000, "expected_end": 7000, "checkpoints": [2000, 5000]}]}'
+            '{"schedules": [{"action_id": "a-lin-1",'
+            ' "start": 1000, "expected_end": 9000, "checkpoints": [4000]}]}'
         )
         role_sampler = ScriptedSampler(
             {
                 "system1": [
-                    '{"reconsider": true, "note": "行动"}',
-                    '{"reconsider": false, "note": "照旧"}',
-                    '{"reconsider": true, "note": "想走更久"}',
+                    '{"route": "rethink", "note": "行动"}',
+                    '{"route": "rethink", "note": "继续同一动作"}',
                 ]
-                + ['{"reconsider": false, "note": "照旧"}'] * 8,
+                + ['{"route": "continue", "note": "照旧"}'] * 8,
                 "system2": [
-                    '{"intention": "慢慢走", "abandon": []}',
-                    '{"intention": "走得更久", "abandon": []}',
+                    '{"intention": "慢慢走"}',
+                    '{"intention": "继续走"}',
                 ],
                 "system3": [
-                    '{"feasible": true, "maintain": [], "modify": [], "new_actions": ["走向书桌"]}',
-                    '{"feasible": true, "maintain": [],'
-                    ' "modify": [{"id": "a-lin-1", "change": "走得更久"}],'
-                    ' "new_actions": []}',
+                    '[{"kind": "move", "destination": {"entity": "书桌"}}]',
+                    '[{"id": "a-lin-1", "kind": "move", "destination": {"entity": "书桌"}}]',
                 ],
             }
         )
-        translator_sampler = ScriptedSampler({"translator": [raw_first, raw_modify]})
+        translator_sampler = ScriptedSampler({"translator": [raw_first]})
         world = FakeSemanticWorld(["lin"])
         scheduler = Scheduler(
             roles=[ModelRole(rid("lin"), role_sampler)],
             world=world,
             translator=ModelTranslator.shared(translator_sampler, tracer=collector),
-            config=RunConfig(introspection_interval=ms(10_000), max_duration=ms(10_000)),
+            config=RunConfig(introspection_interval=ms(5_000), max_duration=ms(10_000)),
             initial_events=[WorldEvent(EventId("door"), SimulationTime(0), "门被推开")],
         )
         result = await scheduler.run()
         assert result.reason is RunStopReason.TIME_LIMIT
         record = scheduler.action_records()[ActionId("a-lin-1")]
-        # 历史保留：start 与已过节点不变；未来按新安排。
+        # 重声明保留身份、开始、进展与时间轴：不重新计时。
         assert record.start == SimulationTime(1000)
-        assert record.checkpoints == (SimulationTime(2000), SimulationTime(5000))
-        assert record.expected_end == SimulationTime(7000)
-        from sceneweave.domain.adjudication import ActionNodeKind
-
-        checkpoint_times = [
-            entry["simulation_time"]
-            for entry in world.adjudications
-            for node in entry["action_nodes"]
-            if node.node is ActionNodeKind.CHECKPOINT
-        ]
-        assert checkpoint_times == [SimulationTime(2000), SimulationTime(5000)]
-        # World 收到结构化修改（归属、原描述、明确 change、新旧安排）。
-        modifications = [node for entry in world.adjudications for node in entry["modifications"]]
-        assert modifications, "修改送交 World 裁决"
-        node = modifications[0]
-        assert node.role_id == "lin"
-        assert node.change == "走得更久"
-        assert node.old_start == SimulationTime(1000)
-        assert node.new_expected_end == SimulationTime(7000)
-        # 修改后的提示不自相矛盾：既要求保留历史又给出明确规则。
-        prompts = [p for c, p in translator_sampler.calls]
-        modify_prompt = prompts[1]
-        assert "已开始的行动保持原 start" in modify_prompt
-        assert "已到达的过程节点保持不变" in modify_prompt
-        assert "走向书桌" in modify_prompt, "原行动描述进入修改提示"
+        assert record.expected_end == SimulationTime(9000)
+        assert record.checkpoints == (SimulationTime(4000),)
+        assert len(translator_sampler.calls) == 1, "既有动作重声明不重译"
 
     asyncio.run(scenario())
 
