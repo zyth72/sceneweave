@@ -238,6 +238,8 @@ uv run --locked python examples/ui_demo.py [端口]
 
 [模型 World 演示](examples/model_world_demo.py) 展示场景卡加载 + ModelWorld + ModelRole + ModelTranslator + Scheduler 的完整生产链路（内联场景数据、脚本假模型、日志导出）：`uv run --locked python examples/model_world_demo.py`。
 
+[System1 路由探针](docs/System1路由探针.md) 是独立于真实模拟的实验脚本，只调用 System1 比较 `route` 字段与三路倾向分布两种表达（不启动 System2/3/翻译器/World/引擎，不影响正式路由）：`uv run --locked python scripts/probe_system1_routing.py --dry-run`（真实调用见文档，默认忽略目录输出）。
+
 示例 `ui_demo.py` 使用自带的精简页面（只显示最新步数据），与统一入口 `--ui` 的完整历史/模型调用视图相互独立；两者都由真实 `StepController` 驱动运行、暂停、单步与停止，回车退出或 Ctrl+C 中止都会清理服务器与控制器。`SimulationServer` 按框架默认绑定全部网络接口，请在可信环境运行，不要公开部署。
 
 ## 当前实现范围

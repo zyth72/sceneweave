@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "note": "System1 路由探针用例。只包含本角色私有上下文与该次事件，不含参考答案；expected_routes 仅供离线评分，不进入模型提示。",
+  "cases": [
+    {
+      "id": "clear-first-intention",
+      "kind": "clear",
+      "title": "首次无意向/计划",
+      "event": "运行开始：本角色还没有任何已保存的意向或动作计划。",
+      "intention": null,
+      "plan": [],
+      "known_actions": [],
+      "memory": ["你刚进入书房，想弄清这里发生过什么"],
+      "expected_routes": ["rethink"],
+      "label_rationale": "第一次决定意向、且没有任何已保存计划，必须重选意向。"
+    },
+    {
+      "id": "clear-goal-changed",
+      "kind": "clear",
+      "title": "目标明确变更",
+      "event": "上级传来新指令：不必再找那份文件，改为确认书房是否安全。",
+      "intention": "找到并取回密封文件",
+      "plan": ["a1 抓取文件 60000-120000"],
+      "known_actions": ["a1 registered（已登记等待开始）"],
+      "memory": ["受命取回密封文件"],
+      "expected_routes": ["rethink"],
+      "label_rationale": "外部目标被明确替换，应重选意向。"
+    },
+    {
+      "id": "clear-goal-achieved",
+      "kind": "clear",
+      "title": "目标已达成应考虑新意向",
+      "event": "你已经把钥匙握在手里，抽屉也拉开了，原目标已实现。",
+      "intention": "拿到抽屉里的钥匙",
+      "plan": ["a1 拉开抽屉 completed", "a2 抓取钥匙 completed"],
+      "known_actions": ["a1 completed", "a2 completed"],
+      "memory": ["原本想拿到抽屉里的钥匙"],
+      "expected_routes": ["rethink"],
+      "label_rationale": "原目标已达成，应形成新的意向。"
+    },
+    {
+      "id": "clear-irrelevant-noise",
+      "kind": "clear",
+      "title": "无关噪声仍继续",
+      "event": "走廊传来与你无关的脚步声，书房内没有任何与你相关的变化。",
+      "intention": "走向书桌并拉开抽屉",
+      "plan": ["a1 移动到书桌 60000-90000", "a2 拉开抽屉 95000-120000（依赖 a1）"],
+      "known_actions": ["a1 started（进行中）"],
+      "memory": ["打算去书桌查看"],
+      "expected_routes": ["continue"],
+      "label_rationale": "无关噪声不影响当前状态，沿用已保存计划。"
+    },
+    {
+      "id": "clear-prerequisite-ready",
+      "kind": "clear",
+      "title": "前置完成且保存计划后续可执行",
+      "event": "World 反馈：a1（移动到书桌）已实际提交为完成。",
+      "intention": "走向书桌并拉开抽屉",
+      "plan": ["a1 移动到书桌 completed", "a2 拉开抽屉 95000-120000（依赖 a1）"],
+      "known_actions": ["a1 completed", "a2 registered（等待依赖）"],
+      "memory": ["打算去书桌查看"],
+      "expected_routes": ["continue"],
+      "label_rationale": "保存计划的后续步骤依赖已满足且可执行，继续提交最近步骤即可。"
+    },
+    {
+      "id": "clear-in-progress-idle",
+      "kind": "clear",
+      "title": "进行中无新增影响",
+      "event": "周期性内思考唤醒：本轮没有新的外部事件。",
+      "intention": "拉开抽屉",
+      "plan": ["a1 拉开抽屉 10000-30000"],
+      "known_actions": ["a1 started（进行中）"],
+      "memory": ["正在拉开抽屉"],
+      "expected_routes": ["continue"],
+      "label_rationale": "动作进行中且无新增影响，沿用计划。"
+    },
+    {
+      "id": "clear-path-blocked-alternative",
+      "kind": "clear",
+      "title": "路径受阻但有替代路径",
+      "event": "你伸手去拉抽屉，但抽屉被锁住了；墙上的挂钩上有一把能用的钥匙。",
+      "intention": "打开抽屉取出里面的东西",
+      "plan": ["a1 拉开抽屉 10000-20000"],
+      "known_actions": ["a1 failed（已确认失败）"],
+      "memory": ["想打开抽屉"],
+      "expected_routes": ["replan"],
+      "label_rationale": "目标保留，原做法受阻但存在替代路径，重新落实即可，不需重选意向。"
+    },
+    {
+      "id": "clear-tool-unavailable",
+      "kind": "clear",
+      "title": "工具不可用但目标可换做法",
+      "event": "你惯用的撬棍不在手边，但桌上放着一把螺丝刀。",
+      "intention": "撬开木箱",
+      "plan": ["a1 用撬棍撬开木箱 10000-25000"],
+      "known_actions": ["a1 failed（已确认失败）"],
+      "memory": ["想撬开木箱"],
+      "expected_routes": ["replan"],
+      "label_rationale": "工具不可用但目标不变、可换做法，保留意向重新落实。"
+    },
+    {
+      "id": "clear-delivery-target-moved",
+      "kind": "clear",
+      "title": "交付对象位置改变但目标保留",
+      "event": "你要交付的对象从书桌旁走到了窗边，仍在可接近范围内。",
+      "intention": "把信封交给对方",
+      "plan": ["a1 移动到对方位置并交付 20000-40000"],
+      "known_actions": ["a1 registered（等待开始）"],
+      "memory": ["准备交付信封"],
+      "expected_routes": ["replan"],
+      "label_rationale": "目标保留，客观位置改变，需按新条件重新安排落实。"
+    },
+    {
+      "id": "boundary-ambiguous-noise",
+      "kind": "boundary",
+      "title": "信息不足：含糊响动",
+      "event": "门外传来一声含糊的响动，无法确定是脚步还是风吹。",
+      "intention": "确认书房是否安全",
+      "plan": ["a1 环顾四周 10000-15000"],
+      "known_actions": ["a1 started（进行中）"],
+      "memory": ["想确认环境是否安全"],
+      "expected_routes": ["continue", "replan", "rethink"],
+      "label_rationale": "信息不足，无法唯一裁决：继续、重落实或重想都可能合理。"
+    },
+    {
+      "id": "boundary-unconfirmed-result",
+      "kind": "boundary",
+      "title": "未确认结果：模糊反馈",
+      "event": "World 反馈：a1 的结果未知（unconfirmed）。",
+      "intention": "取回文件",
+      "plan": ["a1 抓取文件 unconfirmed", "a2 把文件交给上级（依赖 a1）"],
+      "known_actions": ["a1 unconfirmed（结果未知）"],
+      "memory": ["受命取回文件"],
+      "expected_routes": ["continue", "replan"],
+      "label_rationale": "未确认不是已知失败；继续等待或重新落实都合理，不应直接重想。"
+    },
+    {
+      "id": "boundary-competing-request",
+      "kind": "boundary",
+      "title": "新请求与旧目标不确定性并存",
+      "event": "同伴喊你过去帮忙，但你手上取物动作是否完成还不确定。",
+      "intention": "取回文件",
+      "plan": ["a1 抓取文件 unconfirmed"],
+      "known_actions": ["a1 unconfirmed（结果未知）"],
+      "memory": ["受命取回文件"],
+      "expected_routes": ["replan", "rethink"],
+      "label_rationale": "可能重落实现有目标，也可能改换目标去帮忙；两种都合法。"
+    }
+  ]
+}
