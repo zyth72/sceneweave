@@ -242,3 +242,62 @@ seed 打乱与 pair 顺序、两种严格 schema 与并列、失败/缺失分母
 - 三路数值是模型**自报倾向**，未经校准，不是世界事件概率或真实决策概率；argmax 不是正式路由策略。
 - 小样本不宣称统计显著；真实姓名虽替换为中性编号，角色设定内容仍可能被模型凭已有知识识别，属非完全盲测。
 - seed 只控制实验顺序与两模式先后；无法设置模型真实温度/seed。cost 是 OpenCode usage 元数据，不是账单。
+
+## 官方 API 并发入口
+
+大批量对照使用 `scripts/probe_system1_official.py`，通过已锁定的 OpenAI SDK 直接调用
+DeepSeek 官方 `https://api.deepseek.com` 的 `deepseek-flash`。截至 2026-10-10，
+[官方限流说明](https://api-docs.deepseek.com/quick_start/rate_limit/)列明 Flash 账户并发上限为 2500，
+同账户的多个 key 共享上限。本轮只有 192 次调用，因此默认并发为 192；可以降低 `--concurrency`
+给同账户的其他调用留空间。查阅公开文档未找到 Batch 接口，本入口采用异步 Chat Completions。
+HTTP 连接池上限跟随并发参数，避免被 SDK 默认的 1000 连接限制；本轮未测试 2500 个真实并发请求。
+
+```bash
+# 不读取密钥、不调用模型
+uv run --locked python scripts/probe_system1_official.py --dry-run
+
+# 从当前项目 .env 或环境读取 DEEPSEEK_API_KEY；无需粘贴密钥
+uv run --locked python scripts/probe_system1_official.py --concurrency 192 --repeats 2
+
+# 离线重导出：只使用本批 manifest 和 samples，不读 .env 或人格仓库
+uv run --locked python scripts/probe_system1_official.py \
+  --report-from sceneweave-runs/system1-official/<timestamp>
+```
+
+复用同输入配对与严格解析逻辑。所有请求按打乱后的计划顺序并发入队，`call_index` 为计划编号，
+JSONL 行序为实际完成顺序，不能把两条连续的计划记录理解为依次完成。
+默认开启 thinking、reasoning_effort=high、max_tokens=4096、JSON object 响应；
+`--no-thinking` 可关闭思考。共享的 classifier 系统提示、完整请求体及原始响应均保存，
+报告展示实际系统提示与 API 参数。两模式仅改变用户提示词最后的【输出】段，不向模型发送参考答案。
+
+逐请求耗时不含排队时间，包含显式重试等待；全批耗时另存 `timing.json`。
+SDK 自动重试关闭，429、所列 5xx 或连接错误最多额外重试两次；401/402 停止尚未开始的排队调用。
+HTTP 成功但 JSON/schema 非法或响应截断仍记失败，保留原始响应，不悄悄补采有效样本。
+异常只保存类型与状态码，不保存可能含敏感信息的报错原文。
+
+usage 直接来自官方响应：input=`prompt_tokens`，output=`completion_tokens`（含 reasoning），
+reasoning/cache hit 是子集，不重复相加；未返回 cost、reasoning 或 cache write 则记 n/a。
+官方批次与 OpenCode 批次单独保存，旧批只作输入来源，不能合并 usage 或用两通道耗时直接断言模型速度。
+密钥只放请求头，不写 manifest/JSONL/报告；`.env` 和 `sceneweave-runs/` 已在 `.gitignore` 中。
+
+`tests/test_system1_official.py` 使用真实 SDK 搭配假 HTTP，不访问网络或真实密钥，验证并发上限、
+乱序完成与配对覆盖、保存体与实际请求一致、usage 子集口径、重试、认证失败停止排队、截断/坏 JSON
+保留及离线报告不改原始数据。
+
+### 官方实测：20261010-paired
+
+官方 Flash 的 12 状态 × 4 profile × 2 重复 × 2 模式共 192 次，程序并发上限 192，
+批次耗时 23.17 秒。全部取得 HTTP 响应、无重试；189/192 输出通过严格校验。
+field 为 95/96，distribution 为 94/96：去向未知场景中 1 条 distribution 多出
+`continue_placeholder`，另 1 条 field 和 1 条 distribution 用尽 4096 输出 token（全部是思考，
+未产出最终 JSON）。失败原文保留，不补采、不从总分母抹除，因此任务按预期以非零码退出。
+
+93 对可比较结果中 90 对路由一致（96.77%），3 对差异全部位于收件人去向未知：field 偏 rethink，
+distribution 偏 replan。六个有参考标签的场景，两种模式各 48/48 符合；强度梯度无固定正确标签。
+field 重复稳定 45/47 组，distribution 46/46 组；分母不同，失败组不算稳定。
+本批 field 中位耗时 2.80 秒，distribution 3.54 秒；不能沿用旧通道“分布更快”的观察。
+官方未返回金额，不把 token 数推算成账单。
+
+本批对照支持分布能暴露强度与边界差异，但未证明概率校准或真实角色决策正确率。
+可读分析与完整输入输出保存于本地忽略目录
+`sceneweave-runs/system1-official/20261010-paired/review.md`，原始记录、报告、计时及核验结果在同目录。

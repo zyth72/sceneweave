@@ -929,10 +929,11 @@ def _metadata_block(sample: ComparisonSample) -> str:
                 "call_index": sample.call_index,
                 "pair_id": sample.pair_id,
                 "task": f"{sample.case_id}/{sample.profile_label}/r{sample.repeat}/{sample.mode}",
-                "mode_order_call": "本运行的逐次记录顺序",
+                "mode_order_call": "计划调用序号；实际完成行序见 samples.jsonl",
                 "model": sample.model,
                 "prefix_sha256": sample.prefix_sha256,
                 "session_ids": sample.session_ids,
+                "response_ids": sample.message_ids,
                 "elapsed_seconds": sample.elapsed_seconds,
                 "exit_code": sample.exit_code,
                 "timed_out": sample.timed_out,
@@ -990,10 +991,10 @@ def _render_evidence(
         "也没有执行完整模拟。当前模拟时刻未单独指定；计划中的起止毫秒是输入原文。未给出的空间、"
         "身份或通信条件不补写。",
         "",
-        "每个场景依次列出：完整状态 → 各人格的 field/distribution 两种完整 CLI 提示词 → 各自全部重复的"
+        "每个场景依次列出：完整状态 → 各人格的 field/distribution 两种完整用户提示词 → 各自全部重复的"
         "原始响应与解释。提示词直接取自已保存来源 prompt 派生出的本轮 prompt，不是按当前模板重建；"
-        "两种模式共享逐字一致的输入前缀，只在【输出】段不同。它是传给 OpenCode CLI 的文本，"
-        "未记录的 CLI／供应商附加系统提示不能据此还原。",
+        "两种模式共享逐字一致的输入前缀，只在【输出】段不同。"
+        "调用通道、额外系统提示与请求参数以本轮记录为准；未记录的供应商附加内容不能据此还原。",
         "",
         "| 场景 | 分组 | 完整输入与结果 |",
         "| --- | --- | --- |",
@@ -1183,6 +1184,12 @@ def _render_markdown(
         return f"tokens({rendered})；cost={_fmt(data.get('total_cost'))}"
 
     paired = summary["paired"]
+    official = source_meta.get("transport") == "deepseek-official"
+    cost_note = (
+        "官方 API 未返回 cost，保持 n/a；output 已包含 reasoning，不把子集再次叠加。"
+        if official
+        else "cost 是 OpenCode usage 元数据，不是账单；保留 tokens 和 cache 原始口径。"
+    )
     lines = [
         "# System1 对照探针报告（相同输入的 route 字段 vs 三路倾向分布）",
         "",
@@ -1215,6 +1222,15 @@ def _render_markdown(
         "派生；不读取当前 `~/lin`，也不按当前模板重建。旧批次只提供输入，其响应未进入本轮任何样例。",
         "",
     ]
+    if summary.get("execution"):
+        lines += [
+            "## 官方请求配置（两种模式共用）",
+            "",
+            _fenced(json.dumps(summary["execution"], ensure_ascii=False, indent=2), "json"),
+            "",
+            "每次实际请求体及原始 API 响应保存于 samples.jsonl 的 raw_events；不保存密钥或请求头。",
+            "",
+        ]
     lines += _render_evidence(cases, personas, prompts, samples)
     lines += _render_pair_table(samples, cases, personas, summary["repeats"])
     lines += [
@@ -1303,7 +1319,7 @@ def _render_markdown(
         "",
         f"- 配对耗时差 field − distribution 中位数："
         f"{_fmt(diff['median_field_minus_distribution'])} 秒（{diff['pairs']} 对；{diff['definition']}）",
-        "- cost 是 OpenCode usage 返回的元数据，不是账单。tokens 逐原始字段汇总，不把 cache 忽略后当总 token。",
+        f"- {cost_note}",
         "",
         "### 参考标签符合率（离线，不进 prompt）",
         "",
@@ -1372,13 +1388,17 @@ def _render_markdown(
         "- 样本量小（本默认批 12×4×2×2=192 次），不能据此宣称校准或统计显著；"
         "符合率只是对保存的离线参考标签的比对。",
         "- 两种输出任务格式不同（枚举字段 vs 三路分布），差异可能来自任务格式本身，不能单独归因于模型能力。",
-        "- seed 只控制实验顺序与两模式先后；无法设置模型真实温度/seed，模型侧仍有随机性。",
+        f"- {summary['seed_scope']}，模型侧仍有随机性。",
         "- 分布数值是模型**自报倾向**，未经校准，不是世界事件概率或真实决策概率；argmax 不是正式路由策略。",
         "- 真实姓名替换为中性编号，但角色设定内容可能仍被模型凭已有知识识别，属**非完全盲测**；"
         "各 profile 来源文本长度不同，不能单独归因。",
-        "- cost 是 OpenCode usage 返回的元数据，不是账单；极短响应可能需按 sessionID 从会话库补取 usage。",
+        f"- {cost_note}",
         "- 当前模拟时刻未在来源中单独指定；场景是合成状态加真实人格，不补写未给出的位置、身份或剧情。",
-        "- 未保存的 OpenCode／供应商附加系统提示不在记录范围内，不能把 CLI 输入文本等同于完整供应商请求。",
+        (
+            "- 官方请求体和原始响应已保存；未把旧 OpenCode 通道的样本、usage 或附加提示词混入本批。"
+            if official
+            else "- 未保存的 OpenCode／供应商附加系统提示不在记录范围内，不能把 CLI 输入文本等同于完整供应商请求。"
+        ),
     ]
     return "\n".join(lines) + "\n"
 
@@ -1405,6 +1425,24 @@ def write_report(
         seed=seed,
         smoke=smoke,
     )
+    manifest_path = outdir / "manifest.json"
+    if manifest_path.exists():
+        execution = json.loads(manifest_path.read_text(encoding="utf-8")).get("execution")
+        if execution:
+            summary["execution"] = execution
+            summary["seed_scope"] = "仅控制计划入队顺序；不设置模型seed，实际完成顺序取决于并发响应"
+            if execution.get("transport") == "deepseek-official":
+                summary["paired"]["order_definition"] = (
+                    "按 call_index 统计计划入队先后，不代表实际执行或完成先后；"
+                    "实际开始时间与完成行序见 raw_events 和 samples.jsonl"
+                )
+                usage_note = (
+                    "直接汇总官方 API usage；output 含 reasoning，reasoning/cache hit 是子集；"
+                    "未返回的 cost/cache write 记 n/a"
+                )
+                summary["cost_tokens"]["note"] = usage_note
+                for mode in MODES:
+                    summary["by_mode"][mode]["cost_tokens"]["note"] = usage_note
     (outdir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
