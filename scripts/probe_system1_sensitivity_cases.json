@@ -1,0 +1,227 @@
+{
+  "version": 1,
+  "note": "System1 敏感度探针用例（第二轮）。只含合成控制状态与该次事件，不含真实人格文本；expected_routes 仅供离线对照，不进入模型提示。未来 a2 是内部保存、未提交的后续动作（saved），不得写成 registered；a1 的已结束状态在各 suite 中如实保留。",
+  "suites": {
+    "intensity": "同一意向/保存计划/状态，只变收件人的已感知移动范围（六级）。",
+    "influence": "同一共同任务前提下，三种不同强度/层次的事件版本。",
+    "unconfirmed": "三种动作状态控制（未确认/已完成/已失败）。"
+  },
+  "cases": [
+    {
+      "id": "intensity-reach-0.5m",
+      "suite": "intensity",
+      "title": "收件人从原位置移动约0.5米、仍在伸手可及范围",
+      "event": "收件人从原位置移动了约 0.5 米，仍在你伸手可及的范围（约 0.5 米）内。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": [],
+      "label_rationale": "强度序列不设固定标签；仅观察三路倾向如何随距离变化。最低级是收件人从原位置移动约0.5米、仍在伸手可及范围，而不是未移动。"
+    },
+    {
+      "id": "intensity-2m",
+      "suite": "intensity",
+      "title": "收件人在约2米外",
+      "event": "收件人移动到约 2 米外，仍在同一房间内。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": [],
+      "label_rationale": "强度序列不设固定标签。"
+    },
+    {
+      "id": "intensity-far-side",
+      "suite": "intensity",
+      "title": "收件人在房间另一侧",
+      "event": "收件人走到房间的另一侧，仍在同一房间内，距离明显变远。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": [],
+      "label_rationale": "强度序列不设固定标签。"
+    },
+    {
+      "id": "intensity-left-room",
+      "suite": "intensity",
+      "title": "收件人离开房间但去向已知",
+      "event": "收件人离开了当前房间，但你清楚他去了隔壁哪一间。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": [],
+      "label_rationale": "强度序列不设固定标签。"
+    },
+    {
+      "id": "intensity-left-building",
+      "suite": "intensity",
+      "title": "收件人离开建筑但去向已知",
+      "event": "收件人离开了这栋建筑，但你知道他去了哪个已知地点。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": [],
+      "label_rationale": "强度序列不设固定标签。"
+    },
+    {
+      "id": "intensity-destination-unknown",
+      "suite": "intensity",
+      "title": "收件人离开且去向未知",
+      "event": "收件人离开后，你完全不知道他现在在哪里，也没有新的紧急风险。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": [],
+      "label_rationale": "强度序列不设固定标签。"
+    },
+    {
+      "id": "influence-noise",
+      "suite": "influence",
+      "title": "巨响但已确认无关且安全",
+      "event": "附近传来一声巨响，但你已确认它与当前交付任务无关，也没有造成任何危险或影响。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": ["continue"],
+      "label_rationale": "显著但无关且安全：不应触发重选或重落实。"
+    },
+    {
+      "id": "influence-path-blocked",
+      "suite": "influence",
+      "title": "原路径彻底堵死但有替代路线",
+      "event": "通往原交付位置的走廊已被彻底堵死无法通过，但你确认存在另一条已知且可达的路线。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": ["replan"],
+      "label_rationale": "原做法受阻但目标可换路线：保留意向重新落实。"
+    },
+    {
+      "id": "influence-goal-cancelled",
+      "suite": "influence",
+      "title": "原交付目标被明确取消",
+      "event": "上级明确通知：这次信件交付任务取消，信封不再需要送出。",
+      "intention": "把例行信封交给指定收件人",
+      "plan": [
+        "a1 走到原交付位置 60000→90000ms",
+        "a2 把信封交给收件人 95000→120000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（registered）：走到原交付位置，等待开始",
+        "a2（saved）：把信封交给收件人，已在内部保存、未提交"
+      ],
+      "memory": ["这是今天例行的信件交付，收件人已约定"],
+      "expected_routes": ["rethink"],
+      "label_rationale": "目标被明确取消：需要重选意向。"
+    },
+    {
+      "id": "unconfirmed-pending",
+      "suite": "unconfirmed",
+      "title": "抓取结果暂未确认、确认反馈待来",
+      "event": "本轮没有新的外部事件；你已提交的抓取动作结果尚未确认，确认反馈仍待来。",
+      "intention": "取回抽屉里的钥匙并交给上级",
+      "plan": [
+        "a1 抓取抽屉里的钥匙 60000→80000ms",
+        "a2 把钥匙交给上级 85000→110000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（unconfirmed）：抓取结果暂未确认，确认反馈仍待来",
+        "a2（saved）：把钥匙交给上级，已在内部保存、未提交；a1 未确认，不得提前提交依赖 a2"
+      ],
+      "memory": ["受命取回抽屉里的钥匙并交给上级"],
+      "expected_routes": ["continue", "replan"],
+      "label_rationale": "未确认不是已知失败：可保持计划等待或重新落实，不应被当作已完成/失败而强制重想，也不得据此提前提交依赖 a2。"
+    },
+    {
+      "id": "unconfirmed-completed",
+      "suite": "unconfirmed",
+      "title": "抓取已完成且缓存交付可提交",
+      "event": "World 反馈：抓取动作已实际完成，钥匙已在手中。",
+      "intention": "取回抽屉里的钥匙并交给上级",
+      "plan": [
+        "a1 抓取抽屉里的钥匙 60000→80000ms",
+        "a2 把钥匙交给上级 85000→110000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（completed）：已实际抓取到钥匙",
+        "a2（saved）：把钥匙交给上级，已在内部保存、未提交；a1 已完成，依赖满足，可提交"
+      ],
+      "memory": ["受命取回抽屉里的钥匙并交给上级"],
+      "expected_routes": ["continue"],
+      "label_rationale": "前置真实完成、缓存后续可提交：只有 completed 才可提交依赖其的 a2，继续。"
+    },
+    {
+      "id": "unconfirmed-failed",
+      "suite": "unconfirmed",
+      "title": "抓取已失败但知道另一可行做法",
+      "event": "World 反馈：抓取动作失败。你注意到钥匙卡在缝隙里，可以改用另一只手从侧面取出。",
+      "intention": "取回抽屉里的钥匙并交给上级",
+      "plan": [
+        "a1 抓取抽屉里的钥匙 60000→80000ms",
+        "a2 把钥匙交给上级 85000→110000ms（依赖 a1；内部保存、未提交）"
+      ],
+      "known_actions": [
+        "a1（failed）：抓取失败",
+        "a2（saved）：把钥匙交给上级，已在内部保存、未提交；a1 已失败，依赖未满足"
+      ],
+      "memory": ["受命取回抽屉里的钥匙并交给上级", "钥匙卡在缝隙里，侧面仍可够到"],
+      "expected_routes": ["replan"],
+      "label_rationale": "目标保留、原做法失败但另有可行做法：重新落实。"
+    }
+  ]
+}

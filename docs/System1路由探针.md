@@ -62,3 +62,67 @@ uv run --locked python scripts/probe_system1_routing.py
 两种表达在本批案例的路由评分没有差别，都是含糊响动案例出现一次continue、一次replan。分布多提供了路径权重：例如一次响动输出0.55/0.35/0.10，而无关脚步声输出0.95/0.04/0.01（顺序continue/replan/rethink）。它便于程序后续制定策略，但本探针没有验证任何正式路由策略，也没有证明这些数字已校准。
 
 24次每模式的小样本中，分布模式输出更长，reasoning字段更少；完整usage、cache和耗时分模式保留在报告中。这不足以推断长期更省token或更准确。边界案例允许多个路由，因此“符合标签”也不等于有唯一正确答案。
+
+## 第二轮：event intensity sweep + role sensitivity
+
+`scripts/probe_system1_sensitivity.py` 是独立于第一轮的敏感度探针，仍只调用 System1、只输出三路倾向分布
+（`continue/replan/rethink` 之和为 1）与 `note`；argmax 仅用于离线展示/评分，不抽样、不制定正式路由策略。
+它复用第一轮的严格解析、无工具 OpenCode 调用与 usage 补取，不复制其整份实现。
+
+三组控制状态（共 12 个，`scripts/probe_system1_sensitivity_cases.json`）：
+
+- `intensity`（6 级）：同一意向/保存计划/当前状态，只变收件人的已感知移动范围（从原位置移动约 0.5 米仍在伸手
+  可及范围 → 约 2 米 → 房间另一侧 → 离开房间但去向已知 → 离开建筑但去向已知 → 去向未知）。**不硬规定单调**，
+  只观察趋势与符号变化。最低级明确写“移动 0.5 米、仍在伸手可及范围”，不是未移动。
+- `influence`（3 版）：同一共同任务前提下的三种强度/层次事件——巨响但已确认无关且安全（期望 continue）、
+  原路径堵死但有已知替代路线且目标保留（期望 replan）、原交付目标被明确取消（期望 rethink）。检查有无
+  “越强越 rethink”的错误泛化。
+- `unconfirmed`（3 态）：抓取结果暂未确认且确认反馈待来（`pending`：允许 continue/replan，不得误当失败/完成或
+  强制 rethink，也不得据此提前提交依赖 a2）；抓取已实际 `completed` 且缓存交付可提交（此时才可提交依赖它的
+  a2，对照 continue）；抓取已 `failed` 且知道另有可行做法（对照 replan）。三组中的未来 a2 都是内部保存、未提交
+  的后续动作（saved），不是 registered；已结束的 a1 各自保留 unconfirmed/completed/failed 状态。
+
+真实角色来源（用户已明确授权，只读）：`/home/zyth/lin/worldbook/persona/{贝尔法斯特,企业,恶毒}.json`。
+JSON 会整体读入以校验结构，但只把固定白名单字段（`personality` 的核心特征/优点/缺点（性格缺陷）/习惯或怪癖、
+`worldview` 的道德准则、`innerDrive` 的核心动机/短期目标/恐惧与禁忌）抽取并注入 prompt；**不抽取或注入**任何
+非白名单字段（外貌/服装/三围/爱情/亲密台词/关系底账等），不写 `~/lin`。抽取文本与来源 sha256 写入输出目录
+`manifest.json`；模型看到的是中性编号（P1/P2/P3）而非真实姓名，报告再对应真实姓名。默认再加一份无人格基线
+（其余上下文相同），避免只凭知名角色名套模板。
+
+```bash
+# 离线：只生成 prompt 与任务数
+uv run --locked python scripts/probe_system1_sensitivity.py --dry-run
+
+# 小烟测：每 suite 首个状态 × baseline+P1 × 1 次
+uv run --locked python scripts/probe_system1_sensitivity.py --smoke
+
+# 完整：12 状态 × 4 profile × 2 次 = 96 次（分布模式）
+uv run --locked python scripts/probe_system1_sensitivity.py
+```
+
+可选参数：`--suite intensity|influence|unconfirmed|all`、`--profile`（可重复，支持编号或真实角色名）、
+`--repeats`、`--limit`、`--model`、`--agent`、`--opencode`、`--workdir`、`--persona-dir`、`--output-dir`、
+`--usage-db`、`--no-db-usage`、`--timeout`、`--seed`、`--no-thinking`、`--dry-run`、`--smoke`。
+
+输出默认写入忽略目录 `sceneweave-runs/system1-sensitivity/<timestamp>/`：`manifest.json`（完整的受控用例：
+事件/意向/计划/已知行动状态/认知/离线期望与理由，以及模型/suite/repeats/seed/timeout 等参数和用例文件、
+脚本与人格来源的 sha256）、`samples.jsonl`（完整 prompt/原始 response/events/model/sessionID/usage/耗时/error）、
+`summary.json`、`report.md`。报告按 profile 与 suite 都列出耗时 median/p95、tokens（含 cache）与 cost、
+usage 覆盖；给出**逐 profile 的 6 级趋势**（不只看混合全部 profile 的池化），并同时给出实际/有效/预期样本覆盖
+与分组缺失记录；同状态重复波动用每路径 **max-min（全重复范围）**，基线差与两侧范围同屏比较；含邻级与同强度
+不同层比较、逐条错误。输出目录非空时拒绝覆写混入旧样本；任一调用/schema/工具失败时脚本以非零状态退出。
+
+## 第二轮限制
+
+- 三路数值是模型**自报倾向**，未经校准，不是世界事件概率或真实决策概率。
+- 真实姓名替换为中性编号，但角色设定内容可能仍被模型凭已有知识识别，属**非完全盲测**。
+- 各 profile 抽取文本长度不同，模型对不同角色的既有知识也不同，二者与人格设定混杂，不能单独归因。
+- 小样本不宣称统计显著；profile−baseline 差值须与两侧全重复 max-min 范围同屏比较，只描述现象。
+- cost 是 OpenCode usage 返回的元数据，不是账单。
+
+## 第二轮运行（2026-10-10）
+
+修正后的 96 次独立调用已启动，输出位于本机忽略目录
+`sceneweave-runs/system1-sensitivity/20261010-corrected/`。完整数字须等运行结束后核对，原始人格摘录和模型输入不进 Git。
+先前的 `20261010-124237` 与旧编码会话重复启动的 `20261010-124817` 均因测试状态矛盾中止；保留原始记录，
+在各目录 `EXCLUDED.md` 说明，不与修正批混合，也不作最终结论。
