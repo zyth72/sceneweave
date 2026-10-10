@@ -241,6 +241,18 @@ uv run --locked python examples/ui_demo.py [端口]
 
 [System1 路由探针](docs/System1路由探针.md) 是独立于真实模拟的实验脚本，只调用 System1 比较 `route` 字段与三路倾向分布两种表达（不启动 System2/3/翻译器/World/引擎，不影响正式路由；探针与历史样本有意保留两种格式）。正式运行时 System1 模型已只输出三路倾向分布，最终 route 由程序策略决定：`uv run --locked python scripts/probe_system1_routing.py --dry-run`（真实调用见文档，默认忽略目录输出）。第二轮敏感度探针（event intensity sweep + 真实角色/无人格基线的 profile 差异）见同文档：`uv run --locked python scripts/probe_system1_sensitivity.py --dry-run`。
 
+[独立翻译器探针](scripts/probe_translator.py) 复用正式 `ModelTranslator` 的提示词、解析器和登记前校验，对照 DeepSeek Flash 与 Qwen Flash。20 个合成场景覆盖距离、速度、伤腿、疲劳、坐姿、语速、障碍、依赖链、动作交叠、维持与空计划、剧情时刻偏移。只测试翻译器，不启动完整 World 循环，不改变角色行动或裁定成功。身体条件通过 `ObjectiveContext.conditions` 提供；没有实测耗时的场景只做差异诊断。
+
+```bash
+uv run --locked python scripts/probe_translator.py --dry-run
+# 真实调用：当前目录 .env 配置 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY
+uv run --locked python scripts/probe_translator.py --provider both --repeats 2
+# 可指定模型和单个场景；其它选项见 --help
+uv run --locked python scripts/probe_translator.py --provider qwen --qwen-model qwen3.7-flash --case reach-tired
+```
+
+默认关闭思考、temperature=0、并发 6、超时 60 秒、不重试。密钥仅私密读取，不记录请求头。输出在忽略目录 `sceneweave-runs/translator-probe/<UTC时间>/`，包含 `manifest.json`、`samples.jsonl`、`summary.json`、`report.md`。报告保留完整场景、条件、动作、实际发送的提示词、各模型每次原始输出及逐条评价；分别统计格式、登记合法性、明确耗时规则、重复差异、墙钟延迟和使用量。失败不会被自动修正，缓存缺失记为未知；这些指标不代表物理实测准确率或微调收益。可用 `--report-from <运行目录>` 从已保存样本离线重建报告。
+
 示例 `ui_demo.py` 使用自带的精简页面（只显示最新步数据），与统一入口 `--ui` 的完整历史/模型调用视图相互独立；两者都由真实 `StepController` 驱动运行、暂停、单步与停止，回车退出或 Ctrl+C 中止都会清理服务器与控制器。`SimulationServer` 按框架默认绑定全部网络接口，请在可信环境运行，不要公开部署。
 
 ## 当前实现范围

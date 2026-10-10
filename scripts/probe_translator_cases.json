@@ -1,0 +1,669 @@
+{
+  "probe": "independent-translator-probe",
+  "cases": [
+    {
+      "id": "move-1m-1ms",
+      "title": "移动1米·恒速1米/秒",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-1m",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "合成书房场景：林舟从门口走向同一书桌，已选路径长 1 米。动作、目标和模式与对照相同；本例只改变明确列出的距离或身体及速度条件。",
+      "conditions": [
+        "林舟当前站立在门口，坐标为 (0, 0)。",
+        "已选定路径长度为 1 米（从当前位置到书桌，直线无遮挡）。",
+        "显式恒速 1 米/秒：执行段（从 start 到 expected_end）按该速度推进；开始前的等待延迟独立于该速度，由你自行安排。",
+        "无障碍物，无需绕行。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "书桌"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 1000,
+        "tolerance_ms": 300
+      },
+      "scoring": "执行段时长 expected_end−start 应按 距离÷速度 = 1000ms 计算，允许误差 300ms；这是显式恒速规则的确定性检查，不是实测黄金值。"
+    },
+    {
+      "id": "move-5m-1ms",
+      "title": "移动5米·恒速1米/秒",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-5m",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "合成书房场景：林舟从门口走向同一书桌，已选路径长 5 米。动作、目标和模式与对照相同；本例只改变明确列出的距离或身体及速度条件。",
+      "conditions": [
+        "林舟当前站立在门口，坐标为 (0, 0)。",
+        "已选定路径长度为 5 米（从当前位置到书桌，直线无遮挡）。",
+        "显式恒速 1 米/秒：执行段（从 start 到 expected_end）按该速度推进；开始前的等待延迟独立于该速度，由你自行安排。",
+        "无障碍物，无需绕行。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "书桌"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 5000,
+        "tolerance_ms": 750
+      },
+      "scoring": "执行段时长 expected_end−start 应按 距离÷速度 = 5000ms 计算，允许误差 750ms；显式恒速规则的确定性检查。"
+    },
+    {
+      "id": "move-10m-1ms",
+      "title": "移动10米·恒速1米/秒",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-10m",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "合成书房场景：林舟从门口走向同一书桌，已选路径长 10 米。动作、目标和模式与对照相同；本例只改变明确列出的距离或身体及速度条件。",
+      "conditions": [
+        "林舟当前站立在门口，坐标为 (0, 0)。",
+        "已选定路径长度为 10 米（从当前位置到书桌，直线无遮挡）。",
+        "显式恒速 1 米/秒：执行段（从 start 到 expected_end）按该速度推进；开始前的等待延迟独立于该速度，由你自行安排。",
+        "无障碍物，无需绕行。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "书桌"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 10000,
+        "tolerance_ms": 1500
+      },
+      "scoring": "执行段时长 expected_end−start 应按 距离÷速度 = 10000ms 计算，允许误差 1500ms；显式恒速规则的确定性检查。"
+    },
+    {
+      "id": "move-5m-2ms",
+      "title": "移动5米·恒速2米/秒",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-5m-fast",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "合成书房场景：林舟从门口走向同一书桌，已选路径长 5 米。动作、目标和模式与对照相同；本例只改变明确列出的距离或身体及速度条件。",
+      "conditions": [
+        "林舟当前站立在门口，坐标为 (0, 0)。",
+        "已选定路径长度为 5 米（从当前位置到书桌，直线无遮挡）。",
+        "显式恒速 2 米/秒：执行段（从 start 到 expected_end）按该速度推进；开始前的等待延迟独立于该速度，由你自行安排。",
+        "无障碍物，无需绕行。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "书桌"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 2500,
+        "tolerance_ms": 600
+      },
+      "scoring": "执行段时长 expected_end−start 应按 距离÷速度 = 2500ms 计算，允许误差 600ms；显式恒速规则的确定性检查。"
+    },
+    {
+      "id": "move-5m-injured-0.5ms",
+      "title": "移动5米·伤腿0.5米/秒",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-5m-slow",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "合成书房场景：林舟从门口走向同一书桌，已选路径长 5 米。动作、目标和模式与对照相同；本例只改变明确列出的距离或身体及速度条件。",
+      "conditions": [
+        "林舟当前站立在门口，坐标为 (0, 0)。左腿受伤，行走缓慢。",
+        "已选定路径长度为 5 米（从当前位置到书桌，直线无遮挡）。",
+        "伤腿导致的显式恒速 0.5 米/秒：执行段（从 start 到 expected_end）按该速度推进；开始前的等待延迟独立于该速度，由你自行安排。",
+        "无障碍物，无需绕行。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "书桌"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 10000,
+        "tolerance_ms": 1500
+      },
+      "scoring": "执行段时长 expected_end−start 应按 距离÷速度 = 10000ms 计算，允许误差 1500ms；显式恒速规则的确定性检查，同时与同一 5 米路径 1 米/秒（5000ms）成对做方向诊断。"
+    },
+    {
+      "id": "move-obstacle-detour-6m",
+      "title": "移动·已选绕行路线6米",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-detour",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "库房里，林舟要走到对面的工作台。两者之间的直线上横着一条货架带（约 2 米直线距离），无法直穿。林舟已经选定绕行路线：先沿货架侧走到尽头再折回工作台，全程 6 米。角色已选定「移动」原子动作与这条已选路线。翻译器只能按该真实已选绕行路线安排时间，不得把路线改回直线或自行缩短距离。",
+      "conditions": [
+        "林舟当前站立在库房入口，坐标为 (0, 0)。",
+        "工作台在对面，直线距离约 2 米，但中间横着货架带，不可直穿。",
+        "林舟已选定的绕行路线真实长度为 6 米（沿货架侧绕行），你必须按 6 米安排执行段，不得改为直线或其它路线、不得自行缩短距离。",
+        "显式恒速 1 米/秒：执行段（从 start 到 expected_end）按该速度推进；开始前的等待延迟独立于该速度，由你自行安排。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "工作台"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 6000,
+        "tolerance_ms": 1000,
+        "min_duration_ms": 4500
+      },
+      "scoring": "执行段时长 expected_end−start 应按 已选绕行距离÷速度 = 6000ms 计算，允许误差 1000ms；并额外要求时长不低于 4500ms，防止模型把路线偷偷改回 2 米直线（2000ms）。翻译器不得改路线。"
+    },
+    {
+      "id": "reach-standing",
+      "title": "站立伸手·精力充沛",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-reach-stand",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "林舟站立在书桌前，桌上水杯就在眼前伸手可及的位置。林舟决定伸手去拿水杯，角色已选定固定的「伸手」原子动作。没有精确的黄金耗时，只做方向诊断：精力充沛的站立伸手应当干脆利落。",
+      "conditions": [
+        "林舟站立，精力充沛，手臂无任何不适。",
+        "桌上水杯已在伸手可及范围内（约 0.4 米），无需移动、无需改变姿态即可触及。",
+        "使用右手执行固定的 reach 动作；目标是已在伸手范围内的同一桌上物体。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-reach",
+          "kind": "reach",
+          "target": "桌上水杯",
+          "effector": "right_hand"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "direction",
+        "comparison_case": "reach-tired",
+        "direction": "shorter"
+      },
+      "scoring": "没有实测黄金耗时，不判定物理准确率。记录执行段时长并与另一身体条件进行方向诊断；格式与开始时间仍按生产契约检查。"
+    },
+    {
+      "id": "reach-tired",
+      "title": "站立伸手·疲劳",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-reach-tired",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "林舟已连续工作数小时，手臂酸痛、动作明显变慢。他站在书桌前，桌上水杯仍在伸手可及的位置。林舟决定伸手去拿水杯，角色已选定固定的「伸手」原子动作。没有精确的黄金耗时，只做方向诊断：疲劳状态下手部动作应当比精力充沛时更慢。",
+      "conditions": [
+        "林舟站立但已明显疲劳，手臂酸痛、动作变慢。",
+        "桌上水杯仍在伸手可及范围内（约 0.4 米），无需移动、无需改变姿态即可触及。",
+        "使用右手执行固定的 reach 动作；目标是已在伸手范围内的同一桌上物体。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-reach",
+          "kind": "reach",
+          "target": "桌上水杯",
+          "effector": "right_hand"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "direction",
+        "comparison_case": "reach-standing",
+        "direction": "longer"
+      },
+      "scoring": "没有实测黄金耗时，不判定物理准确率。记录执行段时长并与另一身体条件进行方向诊断；格式与开始时间仍按生产契约检查。"
+    },
+    {
+      "id": "say-proficient-4cps",
+      "title": "说固定台词·熟练4字/秒",
+      "role_id": "沈言",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-say-prof",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "沈言是一位熟练的汇报者，要向在场的人说一句固定台词。台词与语速都是角色决定的事实，翻译器只负责把「说话」动作安排为时间。",
+      "conditions": [
+        "沈言对这份台词非常熟练，以稳定 4 字/秒的语速说出；执行段时长 = 字数 ÷ 语速。",
+        "台词内容已由角色决定：「请把这份文件转交给林主管」（共 12 个字）。",
+        "开始前的等待延迟独立于语速，由你自行安排。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-say",
+          "kind": "say",
+          "content": "请把这份文件转交给林主管"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 3000,
+        "tolerance_ms": 700
+      },
+      "scoring": "执行段时长 expected_end−start 应按 12 字 ÷ 4 字/秒 = 3000ms 计算，允许误差 700ms；明确每秒字数规则下的确定性检查。"
+    },
+    {
+      "id": "say-novice-1.5cps",
+      "title": "说同一台词·生疏1.5字/秒",
+      "role_id": "沈言",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-say-nov",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "沈言对接下来要说的台词很生疏，需要逐字念，偶尔停顿。台词与平均语速都是角色决定的事实，翻译器只负责把「说话」动作安排为时间。",
+      "conditions": [
+        "沈言对这份台词生疏，以稳定 1.5 字/秒的平均语速念出，偶尔的停顿已折算进平均语速；执行段时长 = 字数 ÷ 平均语速。",
+        "台词内容与熟练情景完全相同，已由角色决定：「请把这份文件转交给林主管」（共 12 个字）。",
+        "开始前的等待延迟独立于语速，由你自行安排。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-say",
+          "kind": "say",
+          "content": "请把这份文件转交给林主管"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 8000,
+        "tolerance_ms": 1600
+      },
+      "scoring": "执行段时长 expected_end−start 应按 12 字 ÷ 1.5 字/秒 = 8000ms 计算，允许误差 1600ms；明确每秒字数规则下的确定性检查，并与熟练情景（3000ms）成对做方向诊断。"
+    },
+    {
+      "id": "reach-grasp-chain",
+      "title": "依赖链·伸手→抓取",
+      "role_id": "周晴",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-reach-grasp",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "周晴要拿起桌上的水杯。她先伸手触及水杯，抓取依赖伸手被 World 实际提交为完成后才开始。翻译器给出两条独立动作的预计排程；依赖的“预计排程一致性”只表达顺序合理，不代表前置已经成功。",
+      "conditions": [
+        "周晴站立在桌前，桌上水杯已在伸手可及范围内（约 0.4 米）。",
+        "使用右手执行 reach 与 grasp 两个固定原子动作。",
+        "grasp 依赖 reach：World 实际把 reach 提交为 completed 后才允许 grasp 开始。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-reach",
+          "kind": "reach",
+          "target": "桌上水杯",
+          "effector": "right_hand"
+        },
+        {
+          "action_id": "a-grasp",
+          "kind": "grasp",
+          "target": "桌上水杯",
+          "effector": "right_hand",
+          "depends_on": [
+            "a-reach"
+          ]
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "schedule_consistency"
+      },
+      "scoring": "预计排程一致性：grasp 的 start 应不早于 reach 的 expected_end（依赖表示前置完成后才放行）。这表达“预计排程一致”，不是声称前置已成功。"
+    },
+    {
+      "id": "move-reach-grasp-chain",
+      "title": "依赖链·移动→伸手→抓取",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-reach-grasp",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "林舟要取回书架第三层的文件。他先走到书架前（3 米），再伸手触及文件，最后抓取。两个后续动作分别依赖前一个动作被 World 实际提交为 completed 后才会开始。翻译器给出完整链的预计排程。",
+      "conditions": [
+        "林舟当前站立在房间门口，坐标为 (0, 0)。",
+        "书架在 3 米外，直线无遮挡；显式恒速 1 米/秒（执行段）。",
+        "走到书架前（坐标 (3, 0)）后，书架第三层的文件伸手可及，使用右手。",
+        "reach 依赖 move、grasp 依赖 reach：只有前置被 World 实际提交为 completed 后，后置才允许开始。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "书架"
+          },
+          "mode": "walk"
+        },
+        {
+          "action_id": "a-reach",
+          "kind": "reach",
+          "target": "第三层文件",
+          "effector": "right_hand",
+          "depends_on": [
+            "a-move"
+          ]
+        },
+        {
+          "action_id": "a-grasp",
+          "kind": "grasp",
+          "target": "第三层文件",
+          "effector": "right_hand",
+          "depends_on": [
+            "a-reach"
+          ]
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "schedule_consistency"
+      },
+      "scoring": "预计排程一致性：reach.start 应不早于 move.expected_end，grasp.start 应不早于 reach.expected_end。这表达“预计排程一致”，不是声称前置已成功。"
+    },
+    {
+      "id": "move-say-independent",
+      "title": "独立动作·移动+说话",
+      "role_id": "沈言",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-say",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "沈言要在会议开始前走到讲台前，并说一句开场白。移动与说话是两个没有依赖的独立动作：可以交叠、也可以先后，由角色自主选择。翻译器只给出各自的平坦排程，不得替角色把两个动作改成强制串行或强制并行，也不得增加依赖。",
+      "conditions": [
+        "沈言当前站在会场后排，坐标为 (0, 0)。",
+        "讲台在 4 米外，直线无遮挡；显式恒速 1 米/秒（执行段）。",
+        "开场白共 5 个字，以 2 字/秒的稳定语速说出；台词内容已由角色决定：「各位请安静」。",
+        "移动与说话是两个独立动作，没有 depends_on 依赖；是否交叠完全由角色自主决定，翻译器不得替角色改选、不得给两个动作增加依赖。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "讲台"
+          },
+          "mode": "walk"
+        },
+        {
+          "action_id": "a-say",
+          "kind": "say",
+          "content": "各位请安静"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "independent"
+      },
+      "scoring": "两个独立动作都必须各自得到安排（schedules 覆盖 a-move 与 a-say）；交叠或串行均合法，报告中记录模型选择并如实评价，不把交叠与否判为对错。"
+    },
+    {
+      "id": "maintain-reach-new-say",
+      "title": "既有running reach维持·只译新say",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-keep-say",
+      "current_time": 1000,
+      "world_state_version": 3,
+      "scene": "林舟的伸手行动已经登记并在执行中（running reach），他现在同时决定补一句提示语。既有 reach 继续维持、不重译；翻译器只给新的 say 动作安排时间。",
+      "conditions": [
+        "林舟站立在桌前，伸手行动 a-keep 已在进行中（World 客观进展：约 0.2 米/秒）。",
+        "本次新动作只有 say；既有 a-keep 由引擎登记维护，不得重新安排。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-keep",
+          "kind": "reach",
+          "target": "桌上文件",
+          "effector": "right_hand"
+        },
+        {
+          "action_id": "a-new-say",
+          "kind": "say",
+          "content": "这是密封文件"
+        }
+      ],
+      "arrangements": [
+        {
+          "action_id": "a-keep",
+          "phase": "started",
+          "description": "伸手触及 桌上文件（right_hand）",
+          "start": 0,
+          "expected_end": 3000,
+          "checkpoints": [
+            1500
+          ]
+        }
+      ],
+      "rules": {
+        "type": "no_retranslate",
+        "only_action_id": "a-new-say"
+      },
+      "scoring": "既有 running reach（a-keep）必须在既有安排中维持且不被重新安排；schedules 只能包含新动作 a-new-say。若 a-keep 出现在新安排中即失败。"
+    },
+    {
+      "id": "empty-plan",
+      "title": "合法空计划·零调用",
+      "role_id": "周晴",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-empty",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "周晴本轮没有任何要主动实施或维持的行为，完整动作链是合法空计划 []。翻译器应在入口直接合成空安排并显式跳过，不调用模型。",
+      "conditions": [
+        "周晴当前没有任何主动行动声明。"
+      ],
+      "plan": [],
+      "arrangements": [],
+      "rules": {
+        "type": "no_calls"
+      },
+      "scoring": "零模型调用；翻译结果 schedules 为空。空计划不计入付费调用通过率。"
+    },
+    {
+      "id": "offset-same-scene-t0",
+      "title": "同场景·当前时刻0",
+      "role_id": "沈言",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-offset-0",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "沈言要走到窗边（5 米，恒速 1 米/秒）。当前剧情时刻为 0 毫秒。同一场景的另一个样本把当前时刻设为 100000 毫秒，用于诊断翻译器是否正确随当前时刻平移排程。",
+      "conditions": [
+        "沈言当前站立在房间中央，坐标为 (0, 0)。",
+        "已选定路径长度为 5 米（到窗边，直线无遮挡），显式恒速 1 米/秒（执行段）。",
+        "开始前的等待延迟独立于速度，由你自行安排。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "窗边"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "offset",
+        "offset_ms": 100000,
+        "tolerance_ms": 500
+      },
+      "scoring": "本样本自身只需 start 晚于当前时刻（业务约束）。与 offset-same-scene-t100000 成对诊断：后者的 start 应约等于本样本 start + 100000ms，且执行段时长一致。"
+    },
+    {
+      "id": "offset-same-scene-t100000",
+      "title": "同场景·当前时刻100000",
+      "role_id": "沈言",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-offset-100k",
+      "current_time": 100000,
+      "world_state_version": 0,
+      "scene": "沈言要走到窗边（5 米，恒速 1 米/秒）。当前剧情时刻为 100000 毫秒，与同一场景的 t0 样本只差当前时刻。翻译器应把排程整体平移到当前时刻之后，执行段时长不变。",
+      "conditions": [
+        "沈言当前站立在房间中央，坐标为 (0, 0)。",
+        "已选定路径长度为 5 米（到窗边，直线无遮挡），显式恒速 1 米/秒（执行段）。",
+        "开始前的等待延迟独立于速度，由你自行安排。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "窗边"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "offset",
+        "offset_ms": 100000,
+        "tolerance_ms": 500
+      },
+      "scoring": "本样本自身只需 start 晚于当前时刻（业务约束）。与 offset-same-scene-t0 成对诊断：start 应约等于 t0 样本 start + 100000ms，执行段时长一致。"
+    },
+    {
+      "id": "reach-seated",
+      "title": "坐姿伸手·精力充沛",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-reach-seated",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "合成对照：林舟坐在同一书桌前，水杯仍距右手约0.4米且伸手可及。与站姿例只改变坐姿，不额外增加站起或移动动作。",
+      "conditions": [
+        "林舟坐在书桌前，精力充沛，手臂无任何不适。",
+        "桌上水杯已在伸手可及范围内（约 0.4 米），无需移动、无需改变姿态即可触及。",
+        "使用右手执行固定的 reach 动作；目标是已在伸手范围内的同一桌上物体。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-reach",
+          "kind": "reach",
+          "target": "桌上水杯",
+          "effector": "right_hand"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "direction"
+      },
+      "scoring": "无黄金耗时；仅记录坐姿与站姿的时长差异，不预设哪种姿态必定更快。"
+    },
+    {
+      "id": "maintain-only",
+      "title": "仅维持既有伸手·零调用",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-maintain",
+      "current_time": 1000,
+      "world_state_version": 3,
+      "scene": "合成对照：林舟只维持已经登记并开始的伸手动作，不新增行动。翻译器沿用已有安排，必须跳过模型。",
+      "conditions": [
+        "林舟正在继续已经登记的伸手动作 a-keep，当前不新增任何主动行为。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-keep",
+          "kind": "reach",
+          "target": "桌上文件",
+          "effector": "right_hand"
+        }
+      ],
+      "arrangements": [
+        {
+          "action_id": "a-keep",
+          "phase": "started",
+          "description": "伸手触及 桌上文件（right_hand）",
+          "start": 0,
+          "expected_end": 3000,
+          "checkpoints": [
+            1500
+          ]
+        }
+      ],
+      "rules": {
+        "type": "no_calls"
+      },
+      "scoring": "零模型调用，翻译结果 schedules 为空；原有安排保持不变，不计入模型调用通过率。"
+    },
+    {
+      "id": "move-obstacle-straight-2m",
+      "title": "移动·无障碍直线路线2米",
+      "role_id": "林舟",
+      "cycle_id": "probe-cycle",
+      "response_id": "probe-r-move-straight",
+      "current_time": 0,
+      "world_state_version": 0,
+      "scene": "合成库房对照：同一角色走向同一工作台，货架没有挡在中间，已选直线路径2米。与绕行例只改变障碍及因此选定的路径长度。",
+      "conditions": [
+        "林舟当前站立在库房入口，坐标为 (0, 0)。",
+        "工作台在对面，直线距离为2米，没有阻挡。",
+        "林舟已选定直线路径真实长度为2米，不改变这条路径。",
+        "显式恒速1米/秒：执行段按该速度推进，开始前等待独立安排。"
+      ],
+      "plan": [
+        {
+          "action_id": "a-move",
+          "kind": "move",
+          "destination": {
+            "entity": "工作台"
+          },
+          "mode": "walk"
+        }
+      ],
+      "arrangements": [],
+      "rules": {
+        "type": "exact_duration",
+        "expected_ms": 2000,
+        "tolerance_ms": 300
+      },
+      "scoring": "执行段依据显式规则2米÷1米/秒=2000ms，误差允许300ms。与绕行6米进行真实成对诊断，不用假定的2000ms替代模型输出。"
+    }
+  ]
+}
