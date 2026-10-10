@@ -14,15 +14,17 @@ exact prompt、完整安全请求体（不含请求头）、原始响应、usage
 私密读取，值绝不写入输出；拒绝 ``OPENAI_CUSTOM_HEADERS``。
 
 默认 deepseek / qwen 可配置 model、base_url、env-key 名（不暴露值）；
-关闭思考的同配置比较（deepseek thinking disabled、qwen enable_thinking
-false）；两者都 JSON object、temperature=0、max_tokens=2048、max_retries=0、
-timeout 60s、并发默认 6、重复默认 2。全部样本落盘 samples.jsonl，
-另写 manifest.json、summary.json、report.md；失败也留下可分析完整记录，
-联网不通不会静默假成功。
+思考开关 ``--thinking`` 默认关闭，开启时 deepseek 发送
+``thinking={"type": "enabled"}`` 且 ``reasoning_effort="high"``、qwen 发送
+``enable_thinking=true``；``--max-tokens`` 默认 2048，可显式调整；两者都
+JSON object、temperature=0、max_retries=0、timeout 60s、并发默认 6、
+重复默认 2。全部样本落盘 samples.jsonl，另写 manifest.json、summary.json、
+report.md；失败也留下可分析完整记录，联网不通不会静默假成功。
 
 用法示例：
     uv run --locked python scripts/probe_translator.py --dry-run
     uv run --locked python scripts/probe_translator.py --provider both --repeats 2
+    uv run --locked python scripts/probe_translator.py --thinking --max-tokens 8192 --timeout 120
     uv run --locked python scripts/probe_translator.py --case move-5m-1ms --case reach-tired
 """
 
@@ -696,6 +698,7 @@ async def run_one(
     repeat: int,
     *,
     sample_record: Sample | None = None,
+    max_tokens: int = MAX_TOKENS,
 ) -> Sample:
     """一次样本运行：复用生产 ModelTranslator.translate，捕获全部证据。"""
     task_id = f"{case.id}/{provider.name}/r{repeat}"
@@ -706,7 +709,7 @@ async def run_one(
         model=provider.model,
         repeat=repeat,
     )
-    sampler = ProbeSampler(client, provider, sample)
+    sampler = ProbeSampler(client, provider, sample, max_tokens=max_tokens)
     translator = ModelTranslator(lambda _role: sampler)
     request = build_request(case)
     try:
@@ -745,6 +748,8 @@ async def run_tasks(
     tasks: list[tuple[ProbeCase, ProviderConfig, int]],
     outdir: Path,
     concurrency: int,
+    *,
+    max_tokens: int = MAX_TOKENS,
 ) -> list[Sample]:
     """并发运行全部任务；逐样本落盘 samples.jsonl，失败也保留完整记录。"""
     semaphore = asyncio.Semaphore(concurrency)
@@ -760,7 +765,9 @@ async def run_tasks(
         )
         try:
             async with semaphore:
-                await run_one(client, provider, case, repeat, sample_record=sample)
+                await run_one(
+                    client, provider, case, repeat, sample_record=sample, max_tokens=max_tokens
+                )
         except asyncio.CancelledError:
             sample.call_error = "CancelledError"
             sample.schema_ok = False
@@ -1271,6 +1278,18 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def _actual_max_tokens(samples: list[Sample]) -> str:
+    """报告展示真实请求体里的 max_tokens 集合，不写死常量。"""
+    values = sorted(
+        {
+            int(sample.request_body["max_tokens"])
+            for sample in samples
+            if sample.request_body and "max_tokens" in sample.request_body
+        }
+    )
+    return ",".join(str(value) for value in values) if values else "n/a"
+
+
 def _schedule_line(schedule: dict[str, Any]) -> str:
     nodes = ", ".join(str(item) for item in schedule.get("checkpoints", []))
     return (
@@ -1516,7 +1535,7 @@ def _render_markdown(
         "- 重复稳定性比较所有结构合法的原始排程，包括登记失败的输出；稳定不代表正确。",
         "- 本探针不构成训练收益或生产语义的验证；`empty-plan` 与维持跳过（零调用）不计入模型调用约束满足率。",
         "- 请求只含单条 user 消息、`stream=false`、`n=1`、`max_retries=0`、禁止重定向；"
-        "关闭思考的同配置比较（deepseek thinking disabled / qwen enable_thinking false）。",
+        "思考开关由 `--thinking` 控制，实际供应商 `extra_body` 见下表。",
         "",
         "## 模型配置",
         "",
@@ -1530,8 +1549,8 @@ def _render_markdown(
         )
     lines += [
         "",
-        f"采样参数：`temperature={TEMPERATURE}`、`max_tokens={MAX_TOKENS}`、"
-        f"`max_retries=0`、`response_format=json_object`；密钥只按 `api_key_env` "
+        f"采样参数：`temperature={TEMPERATURE}`、`max_tokens={_actual_max_tokens(samples)}`"
+        f"（取自实际请求体）、`max_retries=0`、`response_format=json_object`；密钥只按 `api_key_env` "
         "指定的环境变量名从 `.env` 私密读取，值与请求头不出现在任何输出。",
         "",
         "## 汇总",
@@ -1641,7 +1660,31 @@ def private_env() -> dict[str, str]:
     return env
 
 
+def _extra_body_for(provider: ProviderConfig, thinking: bool) -> dict[str, Any]:
+    """返回供应商实际 extra_body；启用思考时用新字典，不修改 DEFAULT_PROVIDERS 嵌套字典。"""
+    if not thinking:
+        return dict(provider.extra_body)
+    if provider.name == "deepseek":
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+    if provider.name == "qwen":
+        return {"enable_thinking": True}
+    raise ProbeError(f"未知供应商：{provider.name}")
+
+
+def _thinking_enabled(providers: list[ProviderConfig]) -> bool:
+    """从实际 providers.extra_body 判断思考是否开启，不依赖硬编码开关字符串。"""
+    for provider in providers:
+        if provider.name == "deepseek":
+            if provider.extra_body.get("thinking", {}).get("type") == "enabled":
+                return True
+        elif provider.name == "qwen":
+            if provider.extra_body.get("enable_thinking") is True:
+                return True
+    return False
+
+
 def configured_providers(args: argparse.Namespace) -> list[ProviderConfig]:
+    thinking = bool(getattr(args, "thinking", False))
     names = {"deepseek", "qwen"} if args.provider == "both" else {args.provider}
     overrides = {
         "deepseek": (args.deepseek_model, args.deepseek_base_url),
@@ -1658,7 +1701,7 @@ def configured_providers(args: argparse.Namespace) -> list[ProviderConfig]:
                 model=model if model else provider.model,
                 base_url=base_url if base_url else provider.base_url,
                 api_key_env=provider.api_key_env,
-                extra_body=provider.extra_body,
+                extra_body=_extra_body_for(provider, thinking),
             )
         )
     return result
@@ -1671,6 +1714,7 @@ def build_manifest(
     repeats: int,
     concurrency: int,
     timeout: float,
+    max_tokens: int = MAX_TOKENS,
     outdir: Path,
     generated_utc: str,
     status: str,
@@ -1687,11 +1731,14 @@ def build_manifest(
         "providers": [provider.to_dict() for provider in providers],
         "sampling": {
             "temperature": TEMPERATURE,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": max_tokens,
             "max_retries": 0,
             "timeout_seconds": timeout,
             "response_format": {"type": "json_object"},
-            "no_thinking": "公平比较：deepseek thinking disabled / qwen enable_thinking false",
+            "thinking": {
+                "enabled": _thinking_enabled(providers),
+                "note": "由 --thinking 决定；实际供应商 extra_body 见 providers 节",
+            },
             "concurrency": concurrency,
             "repeats": repeats,
         },
@@ -1722,6 +1769,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=MAX_TOKENS,
+        help="单次采样输出最大 token 数（正整数）",
+    )
+    parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help="开启思考：deepseek thinking=enabled 且 reasoning_effort=high，qwen enable_thinking=true",
+    )
     parser.add_argument("--outdir", type=Path, default=None)
     parser.add_argument("--case", action="append", default=None, help="只跑指定 case id，可重复")
     parser.add_argument("--deepseek-model", default=None)
@@ -1741,6 +1799,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--repeats 必须是正整数")
     if args.concurrency < 1:
         raise SystemExit("--concurrency 必须是正整数")
+    if args.max_tokens < 1:
+        raise SystemExit("--max-tokens 必须是正整数")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         raise SystemExit("--timeout 必须是有限正数")
 
@@ -1767,6 +1827,7 @@ def main(argv: list[str] | None = None) -> int:
             repeats=args.repeats,
             concurrency=args.concurrency,
             timeout=args.timeout,
+            max_tokens=args.max_tokens,
             outdir=Path("(dry-run)"),
             generated_utc=_dt.datetime.now(_dt.UTC).isoformat(),
             status="dry-run",
@@ -1797,6 +1858,7 @@ def main(argv: list[str] | None = None) -> int:
         repeats=args.repeats,
         concurrency=args.concurrency,
         timeout=args.timeout,
+        max_tokens=args.max_tokens,
         outdir=outdir,
         generated_utc=generated_utc,
         status="running",
@@ -1840,6 +1902,7 @@ def main(argv: list[str] | None = None) -> int:
                 tasks=tasks,
                 outdir=outdir,
                 concurrency=args.concurrency,
+                max_tokens=args.max_tokens,
             )
         finally:
             await asyncio.gather(

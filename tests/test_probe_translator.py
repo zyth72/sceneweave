@@ -640,6 +640,177 @@ def test_configured_providers_overrides_and_filter() -> None:
     assert both[1].model == "qwen-custom"
 
 
+def test_thinking_switch_builds_new_extra_body_without_mutating_defaults() -> None:
+    from types import SimpleNamespace
+
+    base = dict(
+        provider="both",
+        deepseek_model=None,
+        deepseek_base_url=None,
+        qwen_model=None,
+        qwen_base_url=None,
+    )
+    before = [provider.to_dict() for provider in probe.DEFAULT_PROVIDERS]
+
+    off = probe.configured_providers(SimpleNamespace(**base, thinking=False))
+    assert off[0].extra_body == {"thinking": {"type": "disabled"}}
+    assert off[1].extra_body == {"enable_thinking": False}
+
+    on = probe.configured_providers(SimpleNamespace(**base, thinking=True))
+    assert on[0].extra_body == {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+    assert on[1].extra_body == {"enable_thinking": True}
+
+    after = [provider.to_dict() for provider in probe.DEFAULT_PROVIDERS]
+    assert after == before, "DEFAULT_PROVIDERS 嵌套字典不得被修改"
+    assert on[0].extra_body is not probe.DEFAULT_PROVIDERS[0].extra_body
+
+
+def test_configured_providers_old_namespace_keeps_default_extra_body() -> None:
+    from types import SimpleNamespace
+
+    # 旧调用方 Namespace 没有 thinking 属性：默认关闭思考，extra_body 与默认一致。
+    args = SimpleNamespace(
+        provider="both",
+        deepseek_model=None,
+        deepseek_base_url=None,
+        qwen_model=None,
+        qwen_base_url=None,
+    )
+    providers = probe.configured_providers(args)
+    assert providers[0].extra_body == probe.DEFAULT_PROVIDERS[0].extra_body
+    assert providers[1].extra_body == probe.DEFAULT_PROVIDERS[1].extra_body
+
+
+def test_max_tokens_wired_from_run_one_and_run_tasks_into_request_body(
+    tmp_path: Path,
+) -> None:
+    case = _by_id(probe.load_cases(), "move-5m-1ms")
+    raw = '{"schedules": [{"action_id": "a-move", "start": 1000, "expected_end": 6000}]}'
+    seen: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=_response(json.loads(request.content), content=raw))
+
+    async def scenario() -> None:
+        sample = await probe.run_one(
+            _client(handler), probe.DEFAULT_PROVIDERS[0], case, 0, max_tokens=4096
+        )
+        assert sample.request_body is not None
+        assert sample.request_body["max_tokens"] == 4096
+        assert seen[0]["max_tokens"] == 4096
+
+        default_sample = await probe.run_one(_client(handler), probe.DEFAULT_PROVIDERS[0], case, 1)
+        assert default_sample.request_body is not None
+        assert default_sample.request_body["max_tokens"] == probe.MAX_TOKENS
+
+        client = _client(handler)
+        samples = await probe.run_tasks(
+            {"deepseek": client},
+            [(case, probe.DEFAULT_PROVIDERS[0], 2)],
+            tmp_path,
+            1,
+            max_tokens=6144,
+        )
+        await client.close()
+        assert samples[0].request_body is not None
+        assert samples[0].request_body["max_tokens"] == 6144
+        assert seen[-1]["max_tokens"] == 6144
+
+    asyncio.run(scenario())
+
+
+def test_manifest_records_actual_max_tokens_and_thinking(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    cases = probe.load_cases()[:1]
+    base = dict(
+        provider="both",
+        deepseek_model=None,
+        deepseek_base_url=None,
+        qwen_model=None,
+        qwen_base_url=None,
+    )
+    on = probe.configured_providers(SimpleNamespace(**base, thinking=True))
+    manifest = probe.build_manifest(
+        cases=cases,
+        providers=on,
+        repeats=1,
+        concurrency=2,
+        timeout=60.0,
+        max_tokens=8192,
+        outdir=tmp_path,
+        generated_utc="2026-01-01T00:00:00+00:00",
+        status="done",
+    )
+    assert manifest["sampling"]["max_tokens"] == 8192
+    assert manifest["sampling"]["thinking"]["enabled"] is True
+    assert manifest["providers"][0]["extra_body"] == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "high",
+    }
+    assert manifest["providers"][1]["extra_body"] == {"enable_thinking": True}
+
+    off = probe.configured_providers(SimpleNamespace(**base, thinking=False))
+    manifest_off = probe.build_manifest(
+        cases=cases,
+        providers=off,
+        repeats=1,
+        concurrency=2,
+        timeout=60.0,
+        outdir=tmp_path,
+        generated_utc="2026-01-01T00:00:00+00:00",
+        status="done",
+    )
+    assert manifest_off["sampling"]["max_tokens"] == probe.MAX_TOKENS
+    assert manifest_off["sampling"]["thinking"]["enabled"] is False
+
+
+def test_report_shows_actual_max_tokens_and_provider_extra_body(tmp_path: Path) -> None:
+    case = _by_id(probe.load_cases(), "move-5m-1ms")
+    raw = '{"schedules": [{"action_id": "a-move", "start": 1000, "expected_end": 6000}]}'
+
+    async def scenario() -> None:
+        sample = await probe.run_one(
+            _client(_ok_handler(raw)), probe.DEFAULT_PROVIDERS[0], case, 0, max_tokens=3072
+        )
+        probe.write_report(
+            outdir=tmp_path,
+            samples=[sample],
+            cases=[case],
+            providers=[probe.DEFAULT_PROVIDERS[0]],
+        )
+        report = (tmp_path / "report.md").read_text(encoding="utf-8")
+        assert "max_tokens=3072" in report, "报告应显示真实请求体里的 max_tokens"
+        assert "deepseek thinking disabled" not in report, "不再写死关闭思考"
+        assert '{"thinking": {"type": "disabled"}}' in report, "实际 extra_body 见模型配置表"
+
+    asyncio.run(scenario())
+
+
+def test_dry_run_manifest_with_thinking_and_max_tokens(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("dry-run 不应读取密钥或构造 API 客户端")
+
+    monkeypatch.setattr(probe, "private_env", forbidden)
+    monkeypatch.setattr(probe, "AsyncOpenAI", forbidden)
+    rc = probe.main(["--dry-run", "--case", "move-1m-1ms", "--thinking", "--max-tokens", "8192"])
+    assert rc == 0
+    text = capsys.readouterr().out
+    header = "manifest（不含密钥值）："
+    tail = text[text.index(header) + len(header) :]
+    manifest = json.loads(tail.strip())
+    assert manifest["sampling"]["max_tokens"] == 8192
+    assert manifest["sampling"]["thinking"]["enabled"] is True
+    assert manifest["providers"][0]["extra_body"] == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "high",
+    }
+    assert manifest["providers"][1]["extra_body"] == {"enable_thinking": True}
+
+
 def test_select_cases_filters_and_rejects_unknown() -> None:
     cases = probe.load_cases()
     selected = probe.select_cases(cases, ["move-1m-1ms", "reach-tired"])
@@ -662,3 +833,7 @@ def test_main_rejects_bad_arguments() -> None:
         probe.main(["--repeats", "0"])
     with pytest.raises(SystemExit):
         probe.main(["--timeout", "-1"])
+    with pytest.raises(SystemExit):
+        probe.main(["--max-tokens", "0"])
+    with pytest.raises(SystemExit):
+        probe.main(["--max-tokens", "-5"])
