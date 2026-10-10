@@ -168,3 +168,77 @@ CLI 耗时中位数 4.960 秒、p95 7.352 秒，usage 覆盖 96/96。OpenCode co
 input 55488、output 9791、reasoning 14221、cache_read 31744、cache_write 0，不把缓存忽略后当总 token。
 正式路由仍不改变。先前的 `20261010-124237` 与旧编码会话重复启动的 `20261010-124817` 均因测试状态矛盾中止；
 保留原始记录，在各目录 `EXCLUDED.md` 说明，不与修正批混合，也不作最终结论。
+
+## 第三轮：相同输入的 route 字段与三路倾向分布配对
+
+`scripts/probe_system1_comparison.py` 是独立的第三轮探针：在**同一敏感度输入**下同时问两种输出任务，
+比较 `field`（严格枚举 route 字段）与 `distribution`（三路倾向分布）是否给出相同的路径倾向。
+它仍只调用 System1，不启动 System2/System3/翻译器/World/engine，不生成动作，不影响正式路由。
+
+来源是第二轮的只读记录（默认 `sceneweave-runs/system1-sensitivity/20261010-corrected`）：
+从保存的 `manifest.json` 读取真实人格摘录与 12 个合成状态，从 `samples.jsonl` 读取原始完整 prompt。
+**不读取当前 `~/lin`，也不按当前模板重建** prompt；原始记录只读。按原 prompt 的最后一个独立
+`【输出】` 段切成共同前缀与输出指令：`distribution` 保留旧完整提示词原文，`field` 在同一前缀后
+换成固定的 `{"route": "continue|replan|rethink", "note": "简短说明"}`。同一 (case, profile, repeat)
+的两条调用因此共享逐字一致的事件/人格/意向/计划/状态/记忆/三路定义，只【输出】段不同，前缀 sha256
+写入 manifest 与报告可逐条核对。来源缺少标记、覆盖不全、身份重复、同 case/profile 重复 prompt
+不一致时明确报错，不暗中取第一条。
+
+每对 (case, profile, repeat) 是一种 pair：12 状态 × 4 profile × 2 次重复 × 2 模式 = 192 次全新独立调用。
+固定 seed 打乱 pair 顺序，并为每 pair 随机决定 field/distribution 先后，两条连续执行；seed 只控制
+实验顺序与两模式先后，**不声称设置了模型真实温度或 seed**。旧 96 次只作为输入来源，绝不混入本轮样本，
+也不假装是新鲜配对。
+
+```bash
+# 离线：只生成 prompt 与任务数
+uv run --locked python scripts/probe_system1_comparison.py --dry-run
+
+# 小烟测：每 suite 首例 × baseline/P1 × 每模式 × 1 次 = 12 次
+uv run --locked python scripts/probe_system1_comparison.py --smoke
+
+# 完整：12 状态 × 4 profile × 2 次 × 2 模式 = 192 次
+uv run --locked python scripts/probe_system1_comparison.py
+```
+
+可选参数：`--source-dir`、`--repeats`、`--model`、`--agent`、`--opencode`、`--workdir`（默认
+`/tmp/opencode/system1-comparison`）、`--output-dir`、`--usage-db`、`--no-db-usage`、`--timeout`、
+`--seed`、`--no-thinking`、`--dry-run`、`--smoke`、`--report-from`。沿用无工具 agent、严格解析、
+真实 elapsed 与缺失 `step_finish` 时按 sessionID 从会话库补取 usage；每次新会话 standalone。
+
+输出默认写入忽略目录 `sceneweave-runs/system1-comparison/<timestamp>/`：
+
+- `manifest.json`：完整 case/persona 摘录、来源路径与文件 sha256、模型/repeats/参数、明确的
+  `task_order`（pair_id 与 mode 顺序）、共同前缀 sha256、两种完整 prompt。
+- `samples.jsonl`：逐次立即 append——pair_id、case/profile/repeat/mode、完整 prompt、原始
+  text/note/reasoning/events、model/sessionID、调用/schema/tool/exit/timeout 结果、usage 来源/tokens/cost。
+- `summary.json` / `report.md`：见下。
+
+报告至少含：每模式预期/实际/有效覆盖、完整可比较 pairs、配对一致/不一致/缺失/失败（分母明确）；
+分别给出 field schema 合法率、distribution 合法率及无并列可评分率；每模式同 case/profile 重复的
+路由稳定性（至少两次且全重复有效才比较，失败不计为稳定）；每模式耗时 median/p95、tokens 各原始字段
+（含 cache）、usage 覆盖/来源、cost 元数据，以及配对耗时差 field−distribution 的 median；
+参考标签符合率（失败计入预期分母，有效分母只含可评分样本；intensity 无固定答案不虚报正确率）；按 case/profile
+逐 pair 并列表（field route/note、distribution 三值/argmax/note 含所有不一致）；逐场景完整状态、
+4 人格来源与实际摘录、两种完整实际 CLI 提示词、每 pair 两种原始响应与 note、可折叠 reasoning、
+task/session/调用序号/error。提示词只在逐字相等时合并，引用 `sens._fenced` 避免原文围栏破坏 Markdown；
+旧批次明确标为只读输入来源，不与本轮样本混合。输出目录非空时拒绝覆写；任一调用/schema/tool/覆盖/pair
+丢失或失败时脚本以非零状态退出。
+
+已有记录可离线重导出 Markdown，不读取来源、不初始化 agent、不调用模型，且不动原始文件：
+
+```bash
+uv run --locked python scripts/probe_system1_comparison.py \
+  --report-from sceneweave-runs/system1-comparison/<timestamp>
+```
+
+`tests/test_system1_comparison.py` 覆盖前缀分割与唯一输出段差异、来源身份覆盖与重复 prompt 歧义拒绝、
+seed 打乱与 pair 顺序、两种严格 schema 与并列、失败/缺失分母与稳定性、原始输入输出完整进入 Markdown、
+离线重导出不改原始文件且不访问来源/API、非空输出拒绝与 timeout 范围。默认测试用合成来源与假模型，
+**绝不**进行真实模型调用，也不读取真实人格仓库。
+
+### 第三轮限制
+
+- 两种输出任务格式不同（枚举字段 vs 三路分布），差异可能来自任务格式本身，不能单独归因于模型能力。
+- 三路数值是模型**自报倾向**，未经校准，不是世界事件概率或真实决策概率；argmax 不是正式路由策略。
+- 小样本不宣称统计显著；真实姓名虽替换为中性编号，角色设定内容仍可能被模型凭已有知识识别，属非完全盲测。
+- seed 只控制实验顺序与两模式先后；无法设置模型真实温度/seed。cost 是 OpenCode usage 元数据，不是账单。
